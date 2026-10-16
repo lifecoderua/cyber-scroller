@@ -2,6 +2,9 @@ extends SceneTree
 ## Headless balance harness for CombatSim.
 ## Usage: godot --headless --path . --script res://tools/sim_mission.gd -- [runs_per_cell] [squad_filter]
 ## Prints win rate, durations and deaths per squad / policy / threat.
+## Columns: win% | boss% (reached the boss) | avg_dur (all runs) | win_dur | enc_dur (avg
+## regular encounter, spawn->clear) | boss_d (boss fight when won) | deaths | intr (interrupts).
+## Policies: none = never casts, auto = Autopilot daemon only, bot = scripted "decent play".
 
 const DT := 1.0 / 30.0
 const MAX_TIME := 900.0
@@ -27,7 +30,7 @@ func _init() -> void:
 	game = load("res://scripts/game.gd").new()
 	game.rng.seed = 12345
 	print("CombatSim balance harness — %d runs per cell, 1x speed (sim seconds)" % runs)
-	print("%-26s %-6s %-3s %6s %8s %8s %8s %7s %7s %6s" % ["squad", "policy", "T", "win%", "avg_dur", "win_dur", "enc_dur", "boss_d", "deaths", "intr"])
+	print("%-26s %-6s %-3s %6s %6s %8s %8s %8s %7s %7s %6s" % ["squad", "policy", "T", "win%", "boss%", "avg_dur", "win_dur", "enc_dur", "boss_d", "deaths", "intr"])
 	for si in SQUADS.size():
 		if only >= 0 and si != only:
 			continue
@@ -54,6 +57,7 @@ func _run_cell(sq: Dictionary, policy: String, threat: int, runs: int) -> void:
 	var boss_n := 0
 	var deaths := 0
 	var intr := 0
+	var reached := 0
 	for n in runs:
 		var contract: Dictionary = game.make_contract(threat)
 		var runners := []
@@ -81,6 +85,8 @@ func _run_cell(sq: Dictionary, policy: String, threat: int, runs: int) -> void:
 			for ev in sim.pop_events():
 				if ev.type == "encounter_start":
 					enc_start = sim.time
+					if ev.boss:
+						reached += 1
 				elif ev.type == "encounter_cleared":
 					if ev.boss:
 						boss_time += sim.time - enc_start
@@ -94,8 +100,8 @@ func _run_cell(sq: Dictionary, policy: String, threat: int, runs: int) -> void:
 		dur += sim.time
 		deaths += sim.downed_ids().size()
 		intr += sim.interrupts
-	print("%-26s %-6s %-3d %5.0f%% %7.0fs %7.0fs %7.1fs %6.0fs %7.2f %6.1f" % [
-		sq.name.substr(0, 26), policy, threat, 100.0 * wins / runs, dur / runs,
+	print("%-26s %-6s %-3d %5.0f%% %5.0f%% %7.0fs %7.0fs %7.1fs %6.0fs %7.2f %6.1f" % [
+		sq.name.substr(0, 26), policy, threat, 100.0 * wins / runs, 100.0 * reached / runs, dur / runs,
 		win_dur / maxi(1, wins), enc_time / maxi(1, enc_n), boss_time / maxi(1, boss_n),
 		float(deaths) / runs, float(intr) / runs])
 

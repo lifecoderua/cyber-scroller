@@ -38,12 +38,15 @@ const HEAL_TICK := 1.0
 const RANGED_LOCK := 3.0
 const BURST_GAP := 0.12
 const START_RAM_PCT := 0.6
+const PATCH_UP_PCT := 0.025  # runners recover this fraction of max HP per second between fights
 
 # --- balance knobs (mission side; data tables stay as in DESIGN.md) ---------------
 const ENEMY_HP_MUL := 1.8
-const ENEMY_DMG_MUL := 0.85
+const ENEMY_DMG_MUL := 0.6
 const BOSS_HP_MUL := 0.5
-const BOSS_DMG_MUL := 1.35
+const BOSS_DMG_MUL := 1.6
+## Softens UnitDB's +20%/threat HP growth so high-threat fights stay ~20-35 s.
+const THREAT_HP_DAMPEN := 0.06
 const NETRUNNER_FIRST_CAST := 3.0
 const BOSS_FIRST_CAST := 6.0
 
@@ -114,6 +117,7 @@ class Unit:
 	var moving := false
 	var engaged := false
 	var stop_jitter := 0.0
+	var body := 0.0  # extra half-width for big units (boss)
 	var death_time := 0.0
 
 	func hp_pct() -> float:
@@ -229,7 +233,7 @@ func _add_enemy(kind: String, x: float, enc: int) -> Unit:
 	u.name = e.name
 	u.seed = rng.randi() % 1000
 	u.boss = e.get("boss", false)
-	var hp_mul := ENEMY_HP_MUL * (BOSS_HP_MUL if u.boss else 1.0)
+	var hp_mul := ENEMY_HP_MUL * (BOSS_HP_MUL if u.boss else 1.0) / (1.0 + THREAT_HP_DAMPEN * (threat - 1))
 	var dmg_mul := ENEMY_DMG_MUL * (BOSS_DMG_MUL if u.boss else 1.0)
 	u.max_hp = round(e.hp * hp_mul)
 	u.hp = u.max_hp
@@ -244,7 +248,12 @@ func _add_enemy(kind: String, x: float, enc: int) -> Unit:
 	u.x = x
 	u.encounter = enc
 	u.lane = rng.randf_range(-3.0, 6.0)
-	u.stop_jitter = rng.randf_range(0.0, 14.0) if u.melee else rng.randf_range(-30.0, 0.0)
+	u.body = 22.0 if u.boss else 0.0
+	if u.melee:
+		# Spread melee attackers out a little so they don't stack on one pixel.
+		u.range += rng.randf_range(0.0, 16.0)
+	else:
+		u.stop_jitter = rng.randf_range(-30.0, 0.0)
 	u.atk_timer = rng.randf_range(0.2, 0.8) * u.interval
 	if e.has("cast"):
 		u.cast_def = e.duplicate()
@@ -558,6 +567,8 @@ func _tick_status(u: Unit, h: float) -> void:
 		u.dot_tick = DOT_TICK
 	# HoTs + passive regen tick every HEAL_TICK.
 	var regen := float(fixer.get("regen", 0.0)) if u.team == RUNNER else 0.0
+	if u.team == RUNNER and active_encounter < 0:
+		regen += u.max_hp * PATCH_UP_PCT
 	if not u.hots.is_empty() or regen > 0.0:
 		u.heal_tick -= h
 		if u.heal_tick <= 0.0:
@@ -649,9 +660,9 @@ func _move(h: float) -> void:
 		if not advancing:
 			var t := get_unit(r.target)
 			if t != null and t.alive:
-				var dist: float = t.x - r.x
+				var dist: float = t.x - r.x - t.body - r.body
 				if dist > r.range:
-					want = t.x - r.range + 2.0
+					want = t.x - t.body - r.body - r.range + 2.0
 				else:
 					want = r.x
 			else:
@@ -673,7 +684,7 @@ func _move(h: float) -> void:
 			continue
 		var stop: float = e.range - 2.0 + e.stop_jitter
 		var dist: float = e.x - t.x
-		if absf(dist) > stop:
+		if absf(dist) - t.body - e.body > stop:
 			e.x -= signf(dist) * e.speed * h
 			e.moving = true
 
@@ -683,7 +694,7 @@ func _think(u: Unit, h: float) -> void:
 	if u.stun > 0.0 or u.is_casting():
 		return
 	var t := get_unit(u.target)
-	var in_range := t != null and t.alive and absf(t.x - u.x) <= u.range + 4.0
+	var in_range := t != null and t.alive and absf(t.x - u.x) - t.body - u.body <= u.range + 4.0
 	u.engaged = in_range
 	# Enemy telegraphed cast.
 	if u.team == ENEMY and not u.cast_def.is_empty() and u.psycho_t <= 0.0:
@@ -850,7 +861,7 @@ func _try_skill(u: Unit, t: Unit, in_range: bool) -> bool:
 		"gorilla_slam":
 			var hit := []
 			for e in enemies():
-				if absf(e.x - u.x) <= 48.0:
+				if absf(e.x - u.x) - e.body <= 48.0:
 					hit.append(e)
 			if hit.is_empty():
 				return false
@@ -935,7 +946,7 @@ func _fire_cast(u: Unit) -> void:
 			t.dots.append({"dps": float(u.cast_def.cast_dot), "t": float(u.cast_def.cast_duration), "color": UITheme.PURPLE})
 			_emit({"type": "status", "unit": t.id, "text": "OVERHEAT", "color": UITheme.PURPLE})
 		"berserk_charge":
-			u.x = t.x + 18.0
+			u.x = t.x + 18.0 + u.body
 			_deal(t, float(u.cast_def.cast_damage), u, true, "charge", true, UITheme.RED)
 
 
