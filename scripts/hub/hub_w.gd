@@ -174,8 +174,9 @@ static func soft_stats(id: String) -> String:
 	return s
 
 
-static func runner_stats_text(r: Dictionary) -> String:
-	var s := UnitDB.runner_stats(r)
+## `bonus`: skill tree bonuses (Game.fixer_stats()) so the hub shows mission numbers.
+static func runner_stats_text(r: Dictionary, bonus := {}) -> String:
+	var s := UnitDB.runner_stats(r, bonus)
 	var rng := "MELEE" if s.melee else "RNG %d" % int(s.range)
 	return "HP %d  DMG %s  ARM %d  %s" % [int(s.hp), _num(snappedf(float(s.dmg), 0.1)), int(s.armor), rng]
 

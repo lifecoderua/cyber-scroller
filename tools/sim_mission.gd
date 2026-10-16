@@ -1,6 +1,8 @@
 extends SceneTree
 ## Headless balance harness for CombatSim.
-## Usage: godot --headless --path . --script res://tools/sim_mission.gd -- [runs_per_cell] [squad_filter]
+## Usage: godot --headless --path . --script res://tools/sim_mission.gd -- [runs_per_cell] [squad_filter] [tree]
+## tree: skill tree preset applied to the fixer: "none" (default), "early" (~10 jobs),
+##   "mid" (~30 jobs), "full" (everything bought). squad_filter -1 = all squads.
 ## Prints win rate, durations and deaths per squad / policy / threat.
 ## Columns: win% | boss% (reached the boss) | avg_dur (all runs) | win_dur | enc_dur (avg
 ## regular encounter, spawn->clear) | boss_d (boss fight when won) | deaths | intr (interrupts).
@@ -23,13 +25,27 @@ const SQUADS := [
 ]
 
 
+## Combat-relevant skill tree builds (node id -> rank).
+const TREE_PRESETS := {
+	"early": {"core": 1, "n_ram": 2, "n_regen": 2, "c_dmg": 2, "c_hp": 2, "c_patch": 1, "b_reward": 1, "i_xp": 1},
+	"mid": {"core": 1, "n_ram": 4, "n_regen": 4, "n_hack": 2, "n_boot": 1, "n_cool": 2, "c_dmg": 4, "c_hp": 4,
+		"c_crit": 1, "c_armor": 2, "c_patch": 2, "c_trauma": 1, "b_reward": 3, "b_bounty": 2, "i_xp": 2,
+		"i_shards": 2, "i_scout": 1},
+}
+
+
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	var runs := int(args[0]) if args.size() > 0 else 30
 	var only := int(args[1]) if args.size() > 1 else -1
+	var tree: String = args[2] if args.size() > 2 else "none"
 	game = load("res://scripts/game.gd").new()
 	game.rng.seed = 12345
-	print("CombatSim balance harness — %d runs per cell, 1x speed (sim seconds)" % runs)
+	game.tree_ranks = TREE_PRESETS.get(tree, {}).duplicate()
+	if tree == "full":
+		for id in TreeDB.all_ids():
+			game.tree_ranks[id] = TreeDB.max_rank(id)
+	print("CombatSim balance harness — %d runs per cell, 1x speed (sim seconds), tree: %s" % [runs, tree])
 	print("%-26s %-6s %-3s %6s %6s %8s %8s %8s %7s %7s %6s" % ["squad", "policy", "T", "win%", "boss%", "avg_dur", "win_dur", "enc_dur", "boss_d", "deaths", "intr"])
 	for si in SQUADS.size():
 		if only >= 0 and si != only:

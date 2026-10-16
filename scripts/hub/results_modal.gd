@@ -50,11 +50,19 @@ func setup(h: Control, r: Dictionary) -> void:
 	var bag := int(r.get("bag", 0))
 	var reward := int(r.get("reward", 0))
 	_total_value = bag + reward
-	_row(v, "BAG", "lost" if wiped else "+" + UITheme.format_eddies(bag), UITheme.RED if wiped else UITheme.YELLOW)
+	if wiped and bag > 0:
+		_row(v, "BAG (INSURED)", "+" + UITheme.format_eddies(bag), UITheme.YELLOW)
+	else:
+		_row(v, "BAG", "lost" if wiped else "+" + UITheme.format_eddies(bag), UITheme.RED if wiped else UITheme.YELLOW)
 	if reward > 0:
 		_row(v, "CONTRACT", "+" + UITheme.format_eddies(reward), UITheme.YELLOW)
 	if int(r.get("rep", 0)) > 0:
 		_row(v, "REP", "+%d" % int(r.rep), UITheme.PURPLE)
+	if int(r.get("shards", 0)) > 0:
+		_row(v, "DATA SHARDS", "+%d" % int(r.shards), HubShard.COLOR.lightened(0.25))
+		var icon := HubShard.new(10)
+		var row: HBoxContainer = _rows[_rows.size() - 1]
+		row.add_child(icon)
 	var dur := float(r.get("duration", 0.0))
 	_row(v, "KILLS / TIME", "%d  /  %d:%02d" % [int(r.get("kills", 0)), floori(dur / 60.0), int(dur) % 60], UITheme.TEXT)
 	var drop := String(r.get("soft_drop", ""))

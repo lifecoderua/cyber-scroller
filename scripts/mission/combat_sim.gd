@@ -39,6 +39,7 @@ const RANGED_LOCK := 3.0
 const BURST_GAP := 0.12
 const START_RAM_PCT := 0.6
 const PATCH_UP_PCT := 0.025  # runners recover this fraction of max HP per second between fights
+const REVIVE_PCT := 0.3  # Trauma Team revive HP
 
 # --- balance knobs (mission side; data tables stay as in DESIGN.md) ---------------
 const ENEMY_HP_MUL := 1.8
@@ -162,6 +163,8 @@ var ice_timer := 4.0
 var events: Array = []
 var casts_made := 0
 var interrupts := 0
+var revives_left := 0  # Trauma Team charges (skill tree)
+var revives_used := 0
 
 
 func setup(p_contract: Dictionary, runners: Array, deck_active: Array, p_fixer: Dictionary, seed := 0) -> void:
@@ -175,13 +178,20 @@ func setup(p_contract: Dictionary, runners: Array, deck_active: Array, p_fixer: 
 	encounters = contract.get("encounters", [])
 	max_ram = float(fixer.get("max_ram", 10.0))
 	ram_regen = float(fixer.get("ram_regen", 0.7))
-	ram = max_ram * START_RAM_PCT
+	ram = max_ram * (1.0 if fixer.get("full_ram", false) else START_RAM_PCT)
+	revives_left = int(fixer.get("revive", 0))
 	ice_timer = 4.0
 	for id in deck_active:
 		var d := SoftDB.get_def(id)
 		if d.is_empty():
 			continue
-		slots.append({"id": id, "def": d, "cd_t": 0.0, "charges": int(d.get("charges", 0))})
+		var ch := int(d.get("charges", 0))
+		if ch > 0:
+			# Spare Cartridge (skill tree): extra charges for limited soft.
+			ch += int(fixer.get("charges", 0))
+			d = d.duplicate()
+			d.charges = ch
+		slots.append({"id": id, "def": d, "cd_t": 0.0, "charges": ch})
 	# Runners: melee first, then by class order.
 	var sorted := runners.duplicate()
 	sorted.sort_custom(func(a, b): return CLASS_ORDER.find(a.cls) < CLASS_ORDER.find(b.cls))
@@ -193,7 +203,7 @@ func setup(p_contract: Dictionary, runners: Array, deck_active: Array, p_fixer: 
 
 
 func _add_runner(r: Dictionary, order: int) -> Unit:
-	var s := UnitDB.runner_stats(r)
+	var s := UnitDB.runner_stats(r, fixer)
 	var u := Unit.new()
 	u.id = _next_id
 	_next_id += 1
@@ -234,6 +244,7 @@ func _add_enemy(kind: String, x: float, enc: int) -> Unit:
 	u.seed = rng.randi() % 1000
 	u.boss = e.get("boss", false)
 	var hp_mul := ENEMY_HP_MUL * (BOSS_HP_MUL if u.boss else 1.0) / (1.0 + THREAT_HP_DAMPEN * (threat - 1))
+	hp_mul *= 1.0 - clampf(float(fixer.get("enemy_hp_pct", 0.0)), 0.0, 0.5)  # Recon Drones
 	var dmg_mul := ENEMY_DMG_MUL * (BOSS_DMG_MUL if u.boss else 1.0)
 	u.max_hp = round(e.hp * hp_mul)
 	u.hp = u.max_hp
@@ -403,7 +414,7 @@ func cast(slot: int, target_id := -1) -> bool:
 			return false
 		tgt = get_unit(target_id)
 	ram -= float(d.ram)
-	s.cd_t = float(d.cd)
+	s.cd_t = float(d.cd) * (1.0 - clampf(float(fixer.get("cd_pct", 0.0)), 0.0, 0.6))
 	if int(d.get("charges", 0)) > 0:
 		s.charges -= 1
 	casts_made += 1
@@ -568,7 +579,7 @@ func _tick_status(u: Unit, h: float) -> void:
 	# HoTs + passive regen tick every HEAL_TICK.
 	var regen := float(fixer.get("regen", 0.0)) if u.team == RUNNER else 0.0
 	if u.team == RUNNER and active_encounter < 0:
-		regen += u.max_hp * PATCH_UP_PCT
+		regen += u.max_hp * PATCH_UP_PCT * (1.0 + float(fixer.get("patch_pct", 0.0)))
 	if not u.hots.is_empty() or regen > 0.0:
 		u.heal_tick -= h
 		if u.heal_tick <= 0.0:
@@ -838,6 +849,16 @@ func _stun(t: Unit, dur: float) -> void:
 
 
 func _die(t: Unit) -> void:
+	if t.team == RUNNER and revives_left > 0:
+		# Trauma Team (skill tree): the first runner to drop is pulled back once.
+		revives_left -= 1
+		revives_used += 1
+		t.hp = 0.0
+		t.dots = []
+		t.stun = 0.0
+		_heal(t, t.max_hp * REVIVE_PCT, false)
+		_emit({"type": "status", "unit": t.id, "text": "TRAUMA TEAM!", "color": UITheme.GREEN})
+		return
 	t.alive = false
 	t.hp = 0.0
 	t.death_time = time
@@ -970,7 +991,8 @@ func _tick_ice(h: float) -> void:
 
 
 func _tick_autopilot() -> void:
-	if not fixer.get("autopilot", false) or ram < max_ram - 0.001 or not in_combat():
+	var threshold := max_ram * (1.0 - clampf(float(fixer.get("autopilot_pct", 0.0)), 0.0, 0.5))
+	if not fixer.get("autopilot", false) or ram < threshold - 0.001 or not in_combat():
 		return
 	for i in slots.size():
 		if not can_cast(i):
