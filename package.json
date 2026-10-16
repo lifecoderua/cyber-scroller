@@ -1,0 +1,11 @@
+{
+  "name": "cyber-scroller",
+  "private": true,
+  "scripts": {
+    "postinstall": "touch node_modules/.gdignore",
+    "pages": "cp dist/cyber-scroller.html dist/index.html && gh-pages -d dist --nojekyll"
+  },
+  "devDependencies": {
+    "gh-pages": "^6.3.0"
+  }
+}
