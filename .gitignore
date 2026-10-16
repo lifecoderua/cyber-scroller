@@ -4,6 +4,7 @@
 
 # Export output
 build/
+dist/
 
 # Agent worktrees
 .claude/worktrees/
