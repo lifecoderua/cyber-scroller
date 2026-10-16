@@ -79,6 +79,7 @@ func _ready() -> void:
 	_sync_views()
 	var c := Game.current_contract
 	_banner(str(c.get("district", "")).to_upper(), UITheme.CYAN, "%s  ·  threat %d" % [c.get("title", ""), int(c.get("threat", 1))], 2.6)
+	Audio.attach_mission(self)
 
 
 # --- construction ---------------------------------------------------------------
@@ -397,6 +398,7 @@ func _on_card(slot: int) -> void:
 	var reason := sim.block_reason(slot)
 	if reason != "":
 		cards[slot].deny()
+		Audio.play("ui_error")
 		var msg: String = {"ram": "NOT ENOUGH RAM", "cd": "COOLING DOWN", "charges": "NO CHARGES", "target": "NO TARGET"}.get(reason, "")
 		if msg != "":
 			_toast(msg, UITheme.RED)
@@ -475,6 +477,7 @@ func _screen(world_pos: Vector2) -> Vector2:
 
 
 func _handle(ev: Dictionary) -> void:
+	Audio.on_sim_event(ev)
 	match ev.type:
 		"attack":
 			var a := _view(ev.src)

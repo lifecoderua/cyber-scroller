@@ -20,6 +20,7 @@ boot_splash/show_image=false
 [autoload]
 
 Game="*res://scripts/game.gd"
+Audio="*res://scripts/audio/audio.gd"
 
 [display]
 
