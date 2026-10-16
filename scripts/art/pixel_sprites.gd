@@ -70,7 +70,7 @@ const OVERLAYS := {
 const SKIN_TONES := [Color("f2c7a5"), Color("d9a07a"), Color("a86b4c"), Color("7a4a32"), Color("c8d0d8")]
 const HAIR_COLORS := [Color("1b1b2a"), Color("ff3d81"), Color("2de2e6"), Color("f9c80e"), Color("e8e8f0"), Color("6a3dff")]
 
-## Base palettes per unit kind. Missing "s"/"h" keys are filled from the seed.
+## Base palettes per unit kind. Missing "s"/"h" keys are filled from the vseed.
 const KINDS := {
 	# runners
 	"solo": {"pal": {"j": "7a1f3d", "J": "4e1428", "p": "2a2a3d", "b": "15151f", "a": "ff3d81", "v": "ff3d81", "g": "8a8fa8", "w": "ff9fc4"}, "over": ["blades"]},
@@ -105,15 +105,15 @@ static var _cache := {}
 
 
 ## Frames [walk_a, walk_b, attack] for a runner class or enemy kind.
-static func frames(kind: String, seed := 0) -> Array:
-	var key := "%s_%d" % [kind, seed]
+static func frames(kind: String, vseed := 0) -> Array:
+	var key := "%s_%d" % [kind, vseed]
 	if _cache.has(key):
 		return _cache[key]
 	var out := []
 	if kind == "drone":
 		out = _drone_frames()
 	else:
-		var pal := _palette(kind, seed)
+		var pal := _palette(kind, vseed)
 		var over: Array = KINDS.get(kind, KINDS["gunman"]).over
 		var a := _compose(LEGS_A, over, false)
 		var b := _compose(LEGS_B, over, false)
@@ -124,19 +124,19 @@ static func frames(kind: String, seed := 0) -> Array:
 
 
 ## A single texture usable as a portrait/icon.
-static func portrait(kind: String, seed := 0) -> Texture2D:
-	return frames(kind, seed)[0]
+static func portrait(kind: String, vseed := 0) -> Texture2D:
+	return frames(kind, vseed)[0]
 
 
-static func _palette(kind: String, seed: int) -> Dictionary:
+static func _palette(kind: String, vseed: int) -> Dictionary:
 	var base: Dictionary = KINDS.get(kind, KINDS["gunman"]).pal
 	var pal := {"o": Color("0b0b14")}
 	for k in base:
 		pal[k] = Color(base[k])
 	if not pal.has("s"):
-		pal["s"] = SKIN_TONES[seed % SKIN_TONES.size()]
+		pal["s"] = SKIN_TONES[vseed % SKIN_TONES.size()]
 	if not pal.has("h"):
-		pal["h"] = HAIR_COLORS[(seed / 7) % HAIR_COLORS.size()]
+		pal["h"] = HAIR_COLORS[floori(vseed / 7.0) % HAIR_COLORS.size()]
 	return pal
 
 

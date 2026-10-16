@@ -86,9 +86,9 @@ static func clear(n: Node) -> void:
 
 
 ## Full-body portrait (16x24 at `scale`).
-static func portrait(cls: String, seed: int, scale := 2) -> TextureRect:
+static func portrait(cls: String, vseed: int, scale := 2) -> TextureRect:
 	var t := TextureRect.new()
-	t.texture = PixelSprites.portrait(cls, seed)
+	t.texture = PixelSprites.portrait(cls, vseed)
 	t.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -99,9 +99,9 @@ static func portrait(cls: String, seed: int, scale := 2) -> TextureRect:
 
 
 ## Head-and-shoulders crop of the portrait.
-static func headshot(cls: String, seed: int, scale := 2) -> TextureRect:
+static func headshot(cls: String, vseed: int, scale := 2) -> TextureRect:
 	var at := AtlasTexture.new()
-	at.atlas = PixelSprites.portrait(cls, seed)
+	at.atlas = PixelSprites.portrait(cls, vseed)
 	at.region = Rect2(0, 0, 16, 13)
 	var t := TextureRect.new()
 	t.texture = at

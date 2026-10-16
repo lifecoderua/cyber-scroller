@@ -99,11 +99,11 @@ func _intel_row(encs: Array) -> Control:
 	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	var names := []
 	for k in seen:
-		var tr := HubW.portrait(k, 3, 2)
-		tr.flip_h = true
+		var tex_rect := HubW.portrait(k, 3, 2)
+		tex_rect.flip_h = true
 		if k == "cyberpsycho":
-			tr.modulate = Color(1.15, 0.8, 0.8)
-		row.add_child(tr)
+			tex_rect.modulate = Color(1.15, 0.8, 0.8)
+		row.add_child(tex_rect)
 		names.append(UnitDB.ENEMIES[k].name)
 	row.add_child(HubW.spacer())
 	var cnt := HubW.vbox(0)
