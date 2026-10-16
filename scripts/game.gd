@@ -153,7 +153,7 @@ func squad_runners() -> Array:
 
 
 func max_threat() -> int:
-	return mini(5, 1 + rep / 4)
+	return mini(5, 1 + floori(rep / 4.0))
 
 
 ## Combined fixer stats from the passive deck and squad (used by the mission).
@@ -338,7 +338,7 @@ func make_contract(threat: int) -> Dictionary:
 	var pool := UnitDB.enemy_pool(threat)
 	for e in 3 + threat:
 		var group := []
-		var size := rng.randi_range(2, mini(5, 2 + threat / 2 + e / 2))
+		var size := rng.randi_range(2, mini(5, 2 + floori(threat / 2.0) + floori(e / 2.0)))
 		for n in size:
 			group.append(pool[rng.randi() % pool.size()])
 		encounters.append(group)

@@ -56,7 +56,7 @@ func setup(h: Control, r: Dictionary) -> void:
 	if int(r.get("rep", 0)) > 0:
 		_row(v, "REP", "+%d" % int(r.rep), UITheme.PURPLE)
 	var dur := float(r.get("duration", 0.0))
-	_row(v, "KILLS / TIME", "%d  /  %d:%02d" % [int(r.get("kills", 0)), int(dur) / 60, int(dur) % 60], UITheme.TEXT)
+	_row(v, "KILLS / TIME", "%d  /  %d:%02d" % [int(r.get("kills", 0)), floori(dur / 60.0), int(dur) % 60], UITheme.TEXT)
 	var drop := String(r.get("soft_drop", ""))
 	if drop != "":
 		var d := SoftDB.get_def(drop)
