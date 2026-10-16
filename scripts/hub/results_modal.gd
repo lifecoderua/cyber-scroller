@@ -98,6 +98,7 @@ func play() -> void:
 	_continue.modulate.a = 0.0
 	var wiped := _word == "FLATLINED"
 	hub.screen_flash(_color, 0.5 if wiped else 0.3, 0.5)
+	Audio.play_result(res)
 	var t := create_tween().set_parallel(true)
 	t.tween_method(_reveal, 0.0, 1.0, 0.35)
 	for i in _rows.size():

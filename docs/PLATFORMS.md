@@ -57,6 +57,8 @@ and mark it "played in browser".
 - **Audio unlock**: browsers block audio until a user gesture. Start the first sound only after the first
   tap/click/key (for example a "TAP TO START" screen before any music). Since 4.3, web audio defaults to Sample
   playback: low latency but no bus effects. Switch the web playback type to Stream if effects are needed.
+  The `Audio` autoload (`scripts/audio/`) keeps Sample playback: it stays silent until the first input, and
+  the active-pause music filter is a pre-rendered low-passed copy of each loop crossfaded in sync, not a bus effect.
 - **Save data**: `user://` is backed by IndexedDB on web. It persists per origin, can be cleared by the user, and
   is lost in private browsing. Save right after meaningful events (end of mission), not on quit; there is no
   reliable quit hook on web. Consider an export/import save string.

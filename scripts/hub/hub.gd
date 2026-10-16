@@ -295,6 +295,7 @@ func toast(text: String, color := UITheme.CYAN) -> void:
 func deny(c: Control, reason: String) -> void:
 	HubFx.shake(c)
 	toast(reason, UITheme.RED)
+	Audio.play("ui_error")
 
 
 func deny_money(c: Control) -> void:
@@ -391,6 +392,7 @@ func _open_menu() -> void:
 		close_from(v)
 		show_hint(), 12)
 	v.add_child(how)
+	v.add_child(Audio.mute_row())
 	var reset := HubW.button("RESET SAVE", func():
 		close_from(v)
 		confirm("WIPE SAVE?", "Your crew, soft, eddies and rep will be erased. A fresh safehouse starts from zero.", "WIPE", _reset_save), 12, UITheme.RED)
