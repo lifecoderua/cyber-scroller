@@ -15,11 +15,12 @@ now (see "Art"), so we ship no third-party assets yet.
 ```
 SAFEHOUSE (hub)                               MISSION (side-scroller)
   Contracts -> pick 1 of 3 ------------------>  squad auto-walks right
-  Crew      -> hire / pick squad (max 3)        encounters spawn ahead -> auto-combat
+  Crew      -> hire / pick squad (max 3/4)      encounters spawn ahead -> auto-combat
   Deck      -> equip soft into slots            you cast soft (active pause + target)
   Market    -> buy soft, deck upgrades          between encounters: EXTRACT or push on
+  Nodes     -> skill tree (Data Shards)
        ^                                        boss guards the objective at the end
-       |------------- results: eddies, rep, XP, casualties, loot <--------'
+       |------------- results: eddies, shards, rep, XP, loot <-------------'
 ```
 
 ### Push-your-luck
@@ -135,10 +136,66 @@ runners (Solo, Gunner).
   common 150, uncommon 300, rare 550.
 - Upgrades: +1 active slot (400, then 800), +1 passive slot (500, then 1000).
 
-## Fixer skill tree (planned, next iteration)
-A Nodebuster-style tree bought with rep or "data shards" dropped by bosses: RAM, regen,
-cooldown reduction, hire discounts, bigger hire pool, a 4th squad slot, Autopilot
-improvements, and offline income ("the fixer takes side gigs").
+## Fixer skill tree ("the net", meta progression)
+A Nodebuster-style node graph in the hub's **NODES** tab. Ranks are permanent and survive
+wipes, so every job, even a failed one, moves the fixer forward.
+
+### Data Shards (◆)
+A second currency, shown in the hub header next to eddies and in the job report.
+
+| Outcome | Shards |
+|---------|--------|
+| Success | 1 per regular fight cleared + boss bonus `3 + floor((threat-1)/2)` (3..5) + Boss Dossier |
+| Extracted | 1 per regular fight cleared |
+| Wiped | `max(1, floor(fights cleared / 2))` |
+
+Then × (1 + shard bonus), rounded. A threat-1 success pays 7 (enough for the Core and three
+tier-1 ranks), a threat-5 success pays 13.
+
+### Graph
+Central **Fixer Core** (1 ◆, +1 max RAM) unlocks four branches radiating into the four
+quadrants. Each branch has the same shape: two tier-1 nodes off the core (5 ranks,
+2/3/5/8/12 ◆), three tier-2 nodes, two tier-3 nodes and a **capstone** (40 ◆) that needs
+two tier-2/3 nodes. A node is buyable when all its prerequisites have at least one rank.
+33 nodes, 93 ranks, roughly 900 ◆ for everything (dozens of jobs, idle pacing).
+
+| Branch | Nodes |
+|--------|-------|
+| NETRUNNING (cyan, up-left) | RAM Buffer +1 max RAM/rank · Overclocked Bus +6 % RAM regen · ICEbreaker +8 % hack dmg · Warm Boot: start missions with full RAM · Cryo Cooling -6 % soft CD · Spare Cartridge +1 charge for charged soft · Autopilot v2: daemon casts at 85 % / 70 % RAM · **Neural Overflow**: +2 max RAM, kills give 0.5 RAM |
+| STREET CRED (magenta, up-right) | Smart Ammo +5 % runner dmg · Subdermal Armor +6 % runner HP · Combat Stims +3 % crit · Plated Chrome +1 armor · Ripperdoc on Call +50 % patch-up between fights · Kerenzikov +5 % attack speed · Trauma Team: the first runner to drop is pulled back at 30 % HP (once per mission) · **Full Crew**: +1 squad slot (4 runners) |
+| FIXER BUSINESS (yellow, down-right) | Bounty Board +8 % kill eddies · Haggler +6 % contract pay · Fence Contacts -7 % soft prices · Recruiter Network -8 % hire cost · Side Gigs: offline income 1/2/4 €$ per minute · Insurance Policy: keep 25 % / 50 % of the bag on a wipe · Talent Scout +1 hire candidate · **Fixer Empire**: +10 % kill eddies, +10 % contract pay, side gigs pay up to 12 h |
+| INTEL (green, down-left) | Mentorship +10 % XP · Data Miner +10 % shards · Loot Scanner +8 % soft drop chance · Wider Network: 4th contract offer · Recon Drones: enemies spawn with -4 % HP · Rep Broker: +1 max threat (cap 5) · Boss Dossier +1 shard per boss · **Oracle Feed**: +25 % shards, +20 % drop chance |
+
+### Side gigs (offline income)
+Every save stamps `last_seen_unix`. On load (and on app resume on mobile) the time away is
+paid at the Side Gigs rate, capped at 8 h (12 h with Fixer Empire), if the player was gone
+at least 2 minutes. The amount waits in `offline_pending` (saved) until the hub's
+"WHILE YOU WERE AWAY" popup is collected, which counts the eddies up into the header.
+
+### UI
+- Graph: dot grid, locked nodes dim grey, reachable nodes outlined in the branch color with
+  a price tag, affordable ones pulse, bought nodes fill up per rank and connect with glowing
+  edges carrying data packets, maxed nodes glow solid. Multi-rank nodes show rank pips.
+  Capstones are diamonds, the core a hexagon.
+- Drag pans (mouse or touch, with inertia, clamped to the content), tap selects (generous
+  hit radius), CENTER recenters. The right panel shows branch, name, rank pips, description,
+  NOW / NEXT effect lines, missing prerequisites, cost and a BUY / UPGRADE button.
+- Buying: ring burst and sparks on the node, light runs down the edges to newly opened
+  nodes, a small screen flash, a toast and a shard counter float. Failing: shake + toast.
+- The NODES tab label shows "+" while something is affordable.
+
+### Implementation
+- `TreeDB` (`scripts/data/tree_db.gd`): node table (branch, cost per rank, prerequisites,
+  graph position, per-rank effects) plus helpers.
+- `Game`: `shards`, `tree_ranks`, `last_seen_unix`, `offline_pending`; API `tree_rank`,
+  `tree_bonus(key)` (sum of all node effects), `node_state`, `can_buy_node`, `buy_node`,
+  and tree-aware helpers `squad_max`, `hire_cost`, `soft_price`, `hire_pool_size`,
+  `contract_count`, `max_threat`, `runner_stats`.
+- Mission-side bonuses travel in `Game.fixer_stats()` (RAM, regen, cooldown, hack dmg,
+  full RAM start, charges, autopilot threshold, runner HP / armor / crit / haste, patch-up,
+  revive, enemy HP). `UnitDB.runner_stats(r, bonus)` applies the runner part, so the hub
+  shows the same numbers the mission uses. Economy bonuses apply in `Game.finish_mission`.
+- Save version 2; version-1 saves load with the new keys at their defaults.
 
 ## Art direction
 - Viewport 640x360, canvas_items stretch, nearest filter. Pixel sprites are 16x24 and
@@ -154,9 +211,10 @@ improvements, and offline income ("the fixer takes side gigs").
 scripts/game.gd            autoload "Game": persistent state, save/load, contracts, economy
 scripts/data/soft_db.gd    SoftDB: soft definitions
 scripts/data/unit_db.gd    UnitDB: runner classes, enemies, traits, names
+scripts/data/tree_db.gd    TreeDB: fixer skill tree nodes
 scripts/art/pixel_sprites.gd  PixelSprites: procedural pixel art textures (cached)
 scripts/ui/ui_theme.gd     UITheme: shared neon Theme + color constants
 scripts/main.gd            switches between hub and mission scenes
-scenes/hub.tscn            safehouse UI (contracts, crew, deck, market, results)
+scenes/hub.tscn            safehouse UI (contracts, crew, deck, market, nodes, results)
 scenes/mission.tscn        side-scrolling mission
 ```

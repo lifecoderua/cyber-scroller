@@ -55,7 +55,7 @@ func _offer(id: String) -> Control:
 	var col: Color = d.get("color", UITheme.CYAN)
 	var rarity: String = d.get("rarity", "common")
 	var rc := HubW.rarity_color(rarity)
-	var price := SoftDB.price(id)
+	var price := Game.soft_price(id)
 	var afford := Game.eddies >= price
 	var p := HubW.panel(rc.darkened(0.25), HubW.PANEL_BG, 1, 6)
 	p.size_flags_horizontal = Control.SIZE_EXPAND_FILL

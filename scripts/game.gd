@@ -7,14 +7,19 @@ extends Node
 ## Result dictionary from the mission:
 ##   {outcome: "success"|"extracted"|"wiped", bag: int, kills: int,
 ##    encounters_cleared: int, downed: Array[runner_id], duration: float}
+##
+## Meta progression: Data Shards buy ranks in the fixer skill tree (TreeDB). Every bonus
+## is read through tree_bonus(key); mission-side bonuses travel in fixer_stats().
 
 signal state_changed
 signal mission_requested
 signal mission_finished
+## Side-gig income was found after being away (load / app resume). The hub shows a popup.
+signal offline_income
 
 const SAVE_PATH := "user://save.json"
-const SAVE_VERSION := 1
-const SQUAD_MAX := 3
+const SAVE_VERSION := 2  # v2 adds shards, tree_ranks, last_seen_unix, offline_pending
+const SQUAD_MAX := 3  # base squad size; see squad_max()
 const HIRE_POOL_SIZE := 4
 const HIRE_REROLL_COST := 20
 const MARKET_SIZE := 4
@@ -23,6 +28,9 @@ const PASSIVE_SLOT_PRICES := [500, 1000]
 const BASE_MAX_RAM := 10.0
 const BASE_RAM_REGEN := 0.7
 const SOFT_DROP_CHANCE := 0.4
+const CONTRACT_COUNT := 3
+const GIG_CAP_HOURS := 8.0
+const GIG_MIN_AWAY := 120  # seconds away before side gigs pay out
 
 const CLIENTS := ["Rogue", "Wakako", "Dex", "Padre", "Mr. Blue Eyes", "Regina", "El Capitan", "Muamar"]
 const TARGETS := ["Maelstrom", "Tyger Claws", "Valentinos", "Arasaka", "Militech", "6th Street", "Scavs", "Biotechnica"]
@@ -53,12 +61,26 @@ var contracts: Array = []     # contract dicts
 var market: Array = []        # soft ids for sale
 var current_contract: Dictionary = {}
 var last_result: Dictionary = {}  # summary for the hub to display; cleared by hub
+var shards := 0                  # Data Shards: skill tree currency
+var tree_ranks: Dictionary = {}  # node id -> rank
+var last_seen_unix := 0          # wall clock of the last save (offline income)
+var offline_pending := 0         # side-gig eddies waiting to be collected
+var offline_seconds := 0         # how long the player was away (for the popup)
 
 
 func _ready() -> void:
 	rng.randomize()
 	if not load_game():
 		new_game()
+	accrue_offline()
+
+
+func _notification(what: int) -> void:
+	match what:
+		NOTIFICATION_WM_CLOSE_REQUEST, NOTIFICATION_APPLICATION_PAUSED:
+			save_game()
+		NOTIFICATION_APPLICATION_RESUMED:
+			accrue_offline()
 
 
 # --- lifecycle -----------------------------------------------------------
@@ -76,6 +98,10 @@ func new_game() -> void:
 	passive_slots = 2
 	current_contract = {}
 	last_result = {}
+	shards = 0
+	tree_ranks = {}
+	offline_pending = 0
+	offline_seconds = 0
 	refresh_hire_pool()
 	refresh_contracts()
 	refresh_market()
@@ -84,6 +110,7 @@ func new_game() -> void:
 
 
 func save_game() -> void:
+	last_seen_unix = int(Time.get_unix_time_from_system())
 	var data := {
 		"version": SAVE_VERSION,
 		"eddies": eddies, "rep": rep, "missions_run": missions_run,
@@ -91,6 +118,8 @@ func save_game() -> void:
 		"owned_soft": owned_soft, "deck_active": deck_active, "deck_passive": deck_passive,
 		"active_slots": active_slots, "passive_slots": passive_slots,
 		"contracts": contracts, "market": market,
+		"shards": shards, "tree_ranks": tree_ranks, "offline_pending": offline_pending,
+		"offline_seconds": offline_seconds, "last_seen_unix": last_seen_unix,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
@@ -104,7 +133,11 @@ func load_game() -> bool:
 	if f == null:
 		return false
 	var data = JSON.parse_string(f.get_as_text())
-	if typeof(data) != TYPE_DICTIONARY or int(data.get("version", 0)) != SAVE_VERSION:
+	if typeof(data) != TYPE_DICTIONARY:
+		return false
+	# Older saves load too: keys they lack keep their defaults.
+	var ver := int(data.get("version", 0))
+	if ver < 1 or ver > SAVE_VERSION:
 		return false
 	eddies = int(data.eddies)
 	rep = int(data.rep)
@@ -122,6 +155,16 @@ func load_game() -> bool:
 		c.threat = int(c.threat)
 		c.reward = int(c.reward)
 	market = data.market
+	shards = int(data.get("shards", 0))
+	tree_ranks = {}
+	var tr = data.get("tree_ranks", {})
+	if typeof(tr) == TYPE_DICTIONARY:
+		for k in tr:
+			if not TreeDB.def(k).is_empty():
+				tree_ranks[k] = clampi(int(tr[k]), 0, TreeDB.max_rank(k))
+	offline_pending = int(data.get("offline_pending", 0))
+	offline_seconds = int(data.get("offline_seconds", 0))
+	last_seen_unix = int(data.get("last_seen_unix", 0))
 	return true
 
 
@@ -153,7 +196,38 @@ func squad_runners() -> Array:
 
 
 func max_threat() -> int:
-	return mini(5, 1 + floori(rep / 4.0))
+	return mini(5, 1 + floori(rep / 4.0) + int(tree_bonus("threat_bonus")))
+
+
+## Rep needed for the next threat tier, or -1 when threat 5 is unlocked.
+func next_threat_rep() -> int:
+	var mt := max_threat()
+	return -1 if mt >= 5 else (mt - int(tree_bonus("threat_bonus"))) * 4
+
+
+func squad_max() -> int:
+	return SQUAD_MAX + int(tree_bonus("squad_slots"))
+
+
+func hire_pool_size() -> int:
+	return HIRE_POOL_SIZE + int(tree_bonus("hire_pool"))
+
+
+func hire_cost(r: Dictionary) -> int:
+	return int(round(UnitDB.hire_cost(r) * (1.0 - tree_bonus("hire_disc"))))
+
+
+func soft_price(id: String) -> int:
+	return int(round(SoftDB.price(id) * (1.0 - tree_bonus("market_disc"))))
+
+
+## Side-gig income in eddies per minute (0 without the node).
+func gig_rate() -> float:
+	return tree_bonus("gig_rate")
+
+
+func gig_cap_hours() -> float:
+	return GIG_CAP_HOURS + tree_bonus("gig_cap_h")
 
 
 ## Combined fixer stats from the passive deck and squad (used by the mission).
@@ -162,8 +236,20 @@ func fixer_stats() -> Dictionary:
 		"max_ram": BASE_MAX_RAM, "ram_regen": BASE_RAM_REGEN, "dmg_pct": 0.0, "regen": 0.0,
 		"ram_on_kill": 0.0, "bounty_pct": 0.0, "hack_pct": 0.0, "ice_sentry": false,
 		"autopilot": false,
+		# Skill tree (see TreeDB): mission rules and runner bonuses.
+		"cd_pct": tree_bonus("cd_pct"), "full_ram": tree_bonus("full_ram") > 0.0,
+		"charges": int(tree_bonus("charges")), "autopilot_pct": tree_bonus("autopilot_pct"),
+		"runner_hp_pct": tree_bonus("runner_hp_pct"), "runner_armor": tree_bonus("runner_armor"),
+		"runner_crit": tree_bonus("runner_crit"), "runner_haste": tree_bonus("runner_haste"),
+		"patch_pct": tree_bonus("patch_pct"), "revive": int(tree_bonus("revive")),
+		"enemy_hp_pct": tree_bonus("enemy_hp_pct"),
 	}
-	var regen_pct := 0.0
+	s.max_ram += tree_bonus("max_ram")
+	s.dmg_pct += tree_bonus("dmg_pct")
+	s.hack_pct += tree_bonus("hack_pct")
+	s.bounty_pct += tree_bonus("bounty_pct")
+	s.ram_on_kill += tree_bonus("ram_on_kill")
+	var regen_pct := tree_bonus("ram_regen_pct")
 	for id in deck_passive:
 		var d := SoftDB.get_def(id)
 		s.max_ram += d.get("max_ram", 0)
@@ -183,16 +269,137 @@ func fixer_stats() -> Dictionary:
 	return s
 
 
+## Runner stats with skill tree bonuses (what the mission will use).
+func runner_stats(r: Dictionary) -> Dictionary:
+	return UnitDB.runner_stats(r, fixer_stats())
+
+
+# --- skill tree ----------------------------------------------------------
+
+func tree_rank(id: String) -> int:
+	return int(tree_ranks.get(id, 0))
+
+
+## Sum of one effect key over every bought node.
+func tree_bonus(key: String) -> float:
+	var total := 0.0
+	for id in tree_ranks:
+		var r := int(tree_ranks[id])
+		if r > 0:
+			total += TreeDB.effect_at(id, key, r)
+	return total
+
+
+func node_unlocked(id: String) -> bool:
+	var d := TreeDB.def(id)
+	if d.is_empty():
+		return false
+	for req in d.get("req", []):
+		if tree_rank(req) <= 0:
+			return false
+	return true
+
+
+## Next rank cost, or -1 when maxed.
+func node_cost(id: String) -> int:
+	return TreeDB.cost_for(id, tree_rank(id))
+
+
+## "locked" | "open" (unlocked, rank 0) | "owned" (some ranks) | "maxed".
+func node_state(id: String) -> String:
+	var r := tree_rank(id)
+	if r >= TreeDB.max_rank(id):
+		return "maxed"
+	if r > 0:
+		return "owned"
+	return "open" if node_unlocked(id) else "locked"
+
+
+func can_buy_node(id: String) -> bool:
+	var c := node_cost(id)
+	return c >= 0 and node_unlocked(id) and shards >= c
+
+
+func buy_node(id: String) -> bool:
+	if not can_buy_node(id):
+		return false
+	shards -= node_cost(id)
+	tree_ranks[id] = tree_rank(id) + 1
+	# Structural bonuses take effect right away.
+	while hire_pool.size() < hire_pool_size() and TreeDB.effect_at(id, "hire_pool", 1) > 0.0:
+		hire_pool.append(_new_candidate())
+	while contracts.size() < contract_count() and TreeDB.effect_at(id, "contracts", 1) > 0.0:
+		contracts.append(make_contract(rng.randi_range(1, max_threat())))
+	_changed()
+	return true
+
+
+func nodes_affordable() -> int:
+	var n := 0
+	for id in TreeDB.all_ids():
+		if can_buy_node(id):
+			n += 1
+	return n
+
+
+## Data Shards for a finished mission (see DESIGN.md "Data Shards").
+func shards_for(outcome: String, threat: int, encounters_cleared: int) -> int:
+	var regular := encounters_cleared - (1 if outcome == "success" else 0)
+	var base := 0.0
+	match outcome:
+		"success":
+			base = regular + 3 + floori((threat - 1) / 2.0) + tree_bonus("boss_shards")
+		"extracted":
+			base = regular
+		_:
+			base = maxi(1, floori(regular / 2.0))
+	return int(round(base * (1.0 + tree_bonus("shard_pct"))))
+
+
+# --- offline income --------------------------------------------------------
+
+## Credits side-gig income for the time since the last save; emits offline_income.
+func accrue_offline() -> void:
+	var now := int(Time.get_unix_time_from_system())
+	var away := now - last_seen_unix
+	if last_seen_unix <= 0 or away < GIG_MIN_AWAY or gig_rate() <= 0.0:
+		return
+	var capped := mini(away, int(gig_cap_hours() * 3600.0))
+	var amount := int(floor(gig_rate() * capped / 60.0))
+	if amount <= 0:
+		return
+	offline_pending += amount
+	offline_seconds = away
+	last_seen_unix = now
+	save_game()  # stamps the time, so the same stretch is never paid twice
+	offline_income.emit()
+
+
+func collect_offline() -> int:
+	var n := offline_pending
+	if n <= 0:
+		return 0
+	eddies += n
+	offline_pending = 0
+	offline_seconds = 0
+	_changed()
+	return n
+
+
 # --- crew ----------------------------------------------------------------
 
 func refresh_hire_pool() -> void:
 	hire_pool = []
-	for i in HIRE_POOL_SIZE:
-		var r := UnitDB.make_runner(UnitDB.random_class(rng), rng)
-		# Higher rep brings better candidates.
-		if rng.randf() < rep * 0.04:
-			r.level += 1
-		hire_pool.append(r)
+	for i in hire_pool_size():
+		hire_pool.append(_new_candidate())
+
+
+func _new_candidate() -> Dictionary:
+	var r := UnitDB.make_runner(UnitDB.random_class(rng), rng)
+	# Higher rep brings better candidates.
+	if rng.randf() < rep * 0.04:
+		r.level += 1
+	return r
 
 
 func reroll_hire_pool() -> bool:
@@ -208,13 +415,13 @@ func hire(index: int) -> bool:
 	if index < 0 or index >= hire_pool.size():
 		return false
 	var r: Dictionary = hire_pool[index]
-	var cost := UnitDB.hire_cost(r)
+	var cost := hire_cost(r)
 	if eddies < cost:
 		return false
 	eddies -= cost
 	hire_pool.remove_at(index)
 	roster.append(r)
-	if squad.size() < SQUAD_MAX:
+	if squad.size() < squad_max():
 		squad.append(r.id)
 	_changed()
 	return true
@@ -231,7 +438,7 @@ func dismiss(id: String) -> void:
 func toggle_squad(id: String) -> bool:
 	if id in squad:
 		squad.erase(id)
-	elif squad.size() < SQUAD_MAX:
+	elif squad.size() < squad_max():
 		squad.append(id)
 	else:
 		return false
@@ -245,7 +452,7 @@ func _ensure_not_stuck() -> void:
 		return
 	var cheapest := 1 << 30
 	for r in hire_pool:
-		cheapest = mini(cheapest, UnitDB.hire_cost(r))
+		cheapest = mini(cheapest, hire_cost(r))
 	if eddies < cheapest:
 		var kid := UnitDB.make_runner(UnitDB.random_class(rng), rng, false)
 		kid.name = kid.name + " (street kid)"
@@ -277,7 +484,7 @@ func toggle_equip(id: String) -> bool:
 
 
 func buy_soft(id: String) -> bool:
-	var cost := SoftDB.price(id)
+	var cost := soft_price(id)
 	if eddies < cost or id in owned_soft:
 		return false
 	eddies -= cost
@@ -323,10 +530,14 @@ func refresh_market() -> void:
 
 # --- contracts -----------------------------------------------------------
 
+func contract_count() -> int:
+	return CONTRACT_COUNT + int(tree_bonus("contracts"))
+
+
 func refresh_contracts() -> void:
 	contracts = []
 	var top := max_threat()
-	for i in 3:
+	for i in contract_count():
 		# Spread offers: one easier, one at the top, one random.
 		var threat := clampi(top - 1, 1, 5) if i == 0 else (top if i == 1 else rng.randi_range(1, top))
 		contracts.append(make_contract(threat))
@@ -376,6 +587,7 @@ func finish_mission(result: Dictionary) -> void:
 	var summary := {
 		"outcome": outcome, "title": c.get("title", ""), "threat": threat,
 		"bag": 0, "reward": 0, "rep": 0, "soft_drop": "", "flatlined": [], "level_ups": [],
+		"shards": shards_for(outcome, threat, int(result.get("encounters_cleared", 0))),
 		"kills": int(result.get("kills", 0)), "duration": float(result.get("duration", 0.0)),
 	}
 	var squad_ids := squad.duplicate()
@@ -386,21 +598,25 @@ func finish_mission(result: Dictionary) -> void:
 				summary.flatlined.append(r.name)
 		roster = roster.filter(func(r): return not r.id in squad_ids)
 		squad = []
+		# Insurance Policy: a courier saves part of the bag.
+		summary.bag = int(floor(int(result.get("bag", 0)) * minf(1.0, tree_bonus("wipe_keep"))))
+		eddies += summary.bag
 	else:
 		summary.bag = int(result.get("bag", 0))
 		eddies += summary.bag
 		if outcome == "success":
-			summary.reward = int(c.get("reward", 0))
+			summary.reward = int(round(int(c.get("reward", 0)) * (1.0 + tree_bonus("reward_pct"))))
 			summary.rep = threat
 			eddies += summary.reward
 			rep += threat
-			if rng.randf() < SOFT_DROP_CHANCE:
+			if rng.randf() < SOFT_DROP_CHANCE + tree_bonus("drop_pct"):
 				var pool := SoftDB.all_ids().filter(func(id): return not id in owned_soft)
 				if not pool.is_empty():
 					summary.soft_drop = pool[rng.randi() % pool.size()]
 					owned_soft.append(summary.soft_drop)
 		# XP for everyone who went.
 		var xp := 15 * threat * (int(result.get("encounters_cleared", 0)) + (2 if outcome == "success" else 0))
+		xp = int(round(xp * (1.0 + tree_bonus("xp_pct"))))
 		for id in squad_ids:
 			var r := get_runner(id)
 			if r.is_empty():
@@ -410,6 +626,7 @@ func finish_mission(result: Dictionary) -> void:
 				r.xp -= UnitDB.xp_to_next(r.level)
 				r.level += 1
 				summary.level_ups.append("%s -> L%d" % [r.name, r.level])
+	shards += int(summary.shards)
 	missions_run += 1
 	last_result = summary
 	current_contract = {}

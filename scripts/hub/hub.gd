@@ -2,12 +2,14 @@ extends Control
 ## Safehouse hub: header, tabs (contracts / crew / deck / market), toasts and modals.
 ## All game state lives in the Game autoload; views rebuild on Game.state_changed.
 
-const TAB_NAMES := ["CONTRACTS", "CREW", "DECK", "MARKET"]
+const TAB_NAMES := ["CONTRACTS", "CREW", "DECK", "MARKET", "NODES"]
+const TAB_NODES := 4
 const TAB_SCRIPTS := [
 	preload("res://scripts/hub/tab_contracts.gd"),
 	preload("res://scripts/hub/tab_crew.gd"),
 	preload("res://scripts/hub/tab_deck.gd"),
 	preload("res://scripts/hub/tab_market.gd"),
+	preload("res://scripts/hub/tab_nodes.gd"),
 ]
 const BG_SCRIPT := preload("res://scripts/hub/hub_bg.gd")
 const RESULTS_SCRIPT := preload("res://scripts/hub/results_modal.gd")
@@ -20,7 +22,7 @@ var flash_id := ""
 
 var _views: Array[Control] = []
 var _tab_buttons: Array[Button] = []
-var _dirty: Array[bool] = [true, true, true, true]
+var _dirty: Array[bool] = [true, true, true, true, true]
 var _current := -1
 var _refresh_queued := false
 var _launching := false
@@ -37,6 +39,9 @@ var _threat_pips: HubPips
 var _shown_eddies := 0.0
 var _eddies_target := 0
 var _eddies_tween: Tween
+var _shards_chip: PanelContainer
+var _shards_label: Label
+var _shown_shards := -1
 
 
 func _ready() -> void:
@@ -79,10 +84,13 @@ func _ready() -> void:
 	_eddies_target = Game.eddies
 	_update_header()
 	Game.state_changed.connect(_on_state_changed)
+	Game.offline_income.connect(_maybe_offline, CONNECT_DEFERRED)
 	select_tab(_last_tab)
 
 	if not Game.last_result.is_empty():
 		show_results.call_deferred()
+	elif Game.offline_pending > 0:
+		show_offline.call_deferred()
 	else:
 		_maybe_hint.call_deferred()
 
@@ -133,6 +141,19 @@ func _build_header() -> Control:
 	threat_box.add_child(_threat_pips)
 	threat_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	h.add_child(threat_box)
+
+	_shards_chip = HubW.panel(HubShard.COLOR.darkened(0.35), HubW.DEEP_BG, 1, 6)
+	_shards_chip.custom_minimum_size.x = 50
+	_shards_chip.tooltip_text = "Data Shards: spend them in NODES"
+	var sh := HubW.hbox(4)
+	sh.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sh.add_child(HubShard.new(11))
+	_shards_label = HubW.lbl("0", 15, HubShard.COLOR.lightened(0.3))
+	_shards_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_shards_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sh.add_child(_shards_label)
+	_shards_chip.add_child(sh)
+	h.add_child(_shards_chip)
 
 	_eddies_chip = HubW.panel(UITheme.YELLOW.darkened(0.35), HubW.DEEP_BG, 1, 6)
 	_eddies_chip.custom_minimum_size.x = 96
@@ -191,9 +212,12 @@ func _style_tab(i: int, active: bool) -> void:
 	var b := _tab_buttons[i]
 	var accent := UITheme.CYAN
 	var alert := i == 1 and Game.squad_runners().is_empty()
+	var ready := i == TAB_NODES and Game.nodes_affordable() > 0
 	if alert:
 		accent = UITheme.RED
-	b.text = TAB_NAMES[i] + (" (!)" if alert else "")
+	elif i == TAB_NODES:
+		accent = HubShard.COLOR
+	b.text = TAB_NAMES[i] + (" (!)" if alert else (" +" if ready else ""))
 	if active:
 		var s := UITheme.box(accent.darkened(0.7), accent, 1, 2)
 		s.border_width_bottom = 3
@@ -203,7 +227,7 @@ func _style_tab(i: int, active: bool) -> void:
 		b.add_theme_color_override("font_hover_color", accent.lightened(0.4))
 	else:
 		HubW.restyle(b, accent)
-		b.add_theme_color_override("font_color", UITheme.TEXT_DIM if not alert else UITheme.RED)
+		b.add_theme_color_override("font_color", UITheme.RED if alert else (HubShard.COLOR.lightened(0.3) if ready else UITheme.TEXT_DIM))
 
 
 # --- state ---------------------------------------------------------------
@@ -232,8 +256,19 @@ func _update_header() -> void:
 	var mt := Game.max_threat()
 	_threat_pips.set_value(mt, 5, HubW.threat_color(mt))
 	var tb: Control = _threat_pips.get_parent()
-	tb.tooltip_text = "Max contract threat %d. Next tier at %d rep." % [mt, mt * 4] if mt < 5 else "Max contract threat unlocked."
+	tb.tooltip_text = "Max contract threat %d. Next tier at %d rep." % [mt, Game.next_threat_rep()] if mt < 5 else "Max contract threat unlocked."
 	_set_eddies(Game.eddies)
+	_set_shards(Game.shards)
+
+
+func _set_shards(v: int) -> void:
+	if _shown_shards >= 0 and v != _shown_shards:
+		var delta := v - _shown_shards
+		var col := HubShard.COLOR.lightened(0.3) if delta > 0 else UITheme.MAGENTA
+		HubFx.flash(_shards_chip, col, 0.5)
+		_float_text(("+%d" if delta > 0 else "%d") % delta, col, _shards_chip)
+	_shown_shards = v
+	_shards_label.text = str(v)
 
 
 func _set_eddies(target: int) -> void:
@@ -301,6 +336,11 @@ func deny(c: Control, reason: String) -> void:
 func deny_money(c: Control) -> void:
 	deny(c, "Not enough eddies")
 	HubFx.shake(_eddies_chip, 3.0)
+
+
+func deny_shards(c: Control) -> void:
+	deny(c, "Not enough Data Shards. Run more jobs.")
+	HubFx.shake(_shards_chip, 3.0)
 
 
 func screen_flash(color: Color, alpha := 0.35, time := 0.35) -> void:
@@ -453,7 +493,61 @@ func show_results() -> void:
 ## Called by the results modal when closed.
 func results_closed() -> void:
 	Game.last_result = {}
-	_maybe_hint()
+	if Game.offline_pending > 0:
+		show_offline()
+	else:
+		_maybe_hint()
+
+
+func _maybe_offline() -> void:
+	if Game.offline_pending > 0 and Game.last_result.is_empty() and not has_meta("offline_open"):
+		show_offline()
+
+
+## "While you were away" popup for side-gig income; COLLECT credits it with a count-up.
+func show_offline() -> void:
+	var amount := Game.offline_pending
+	if amount <= 0 or has_meta("offline_open"):
+		return
+	set_meta("offline_open", true)
+	var pv := modal_panel(UITheme.YELLOW, 280)
+	var v: VBoxContainer = pv[1]
+	var head := HubW.lbl("// SIDE GIGS", 9, UITheme.TEXT_DIM)
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(head)
+	var title := HubW.lbl("WHILE YOU WERE AWAY", 16, UITheme.YELLOW)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(title)
+	var secs := Game.offline_seconds
+	var capped := secs > int(Game.gig_cap_hours() * 3600.0)
+	var away := "%dh %02dm" % [floori(secs / 3600.0), floori(secs / 60.0) % 60] if secs >= 3600 else "%d min" % maxi(1, floori(secs / 60.0))
+	var sub := HubW.wrap(HubW.lbl("Gone %s. Your side gigs kept the eddies flowing at %d €$/min." % [away, int(Game.gig_rate())], 10, UITheme.TEXT))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(sub)
+	if capped:
+		var cap := HubW.lbl("(paid for the first %d h)" % int(Game.gig_cap_hours()), 9, UITheme.TEXT_DIM)
+		cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		v.add_child(cap)
+	v.add_child(HubW.line(Color(UITheme.YELLOW, 0.35)))
+	var big := HubW.lbl("+0 €$", 26, UITheme.YELLOW)
+	big.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	big.add_theme_constant_override("outline_size", 4)
+	v.add_child(big)
+	var ok := HubW.button("COLLECT", func(): pass, 13, UITheme.YELLOW, true)
+	ok.pressed.connect(func():
+		close_from(v)
+		remove_meta("offline_open")
+		var n := Game.collect_offline()
+		if n > 0:
+			screen_flash(UITheme.YELLOW, 0.25, 0.4)
+			toast("Side gigs paid %s" % UITheme.format_eddies(n), UITheme.YELLOW)
+		_maybe_hint())
+	v.add_child(ok)
+	open_modal(pv[0])
+	var t := big.create_tween()
+	t.tween_interval(0.2)
+	t.tween_method(func(x: float): big.text = "+" + UITheme.format_eddies(int(round(x))), 0.0, float(amount), 0.8) \
+		.set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
 
 
 # --- mission -------------------------------------------------------------

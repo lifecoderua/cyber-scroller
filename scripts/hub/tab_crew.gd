@@ -63,15 +63,16 @@ func refresh() -> void:
 func _build_squad() -> void:
 	HubW.clear(_squad_row)
 	var sq := Game.squad_runners()
-	_squad_label.text = "SQUAD %d/%d" % [sq.size(), Game.SQUAD_MAX]
+	_squad_label.text = "SQUAD %d/%d" % [sq.size(), Game.squad_max()]
 	_squad_label.add_theme_color_override("font_color", UITheme.RED if sq.is_empty() else UITheme.CYAN)
 	_roster_count.text = "%d ON\nPAYROLL" % Game.roster.size()
-	for i in Game.SQUAD_MAX:
+	var card_w := 76.0 if Game.squad_max() <= 3 else 62.0  # Full Crew node: 4 slots
+	for i in Game.squad_max():
 		if i < sq.size():
 			var r: Dictionary = sq[i]
 			var col := HubW.class_color(r.cls)
 			var card := HubCard.new(col, Color(col.darkened(0.8), 0.9), 1, 2)
-			card.custom_minimum_size = Vector2(76, 32)
+			card.custom_minimum_size = Vector2(card_w, 32)
 			card.tooltip_text = "Tap to remove from squad"
 			var row := HubW.hbox(3)
 			row.add_child(HubW.headshot(r.cls, int(r.seed), 2))
@@ -87,7 +88,7 @@ func _build_squad() -> void:
 			_squad_row.add_child(card)
 		else:
 			var empty := HubW.panel(Color(UITheme.TEXT_DIM, 0.35), Color(0, 0, 0, 0.35), 1, 2)
-			empty.custom_minimum_size = Vector2(76, 32)
+			empty.custom_minimum_size = Vector2(card_w, 32)
 			var l := HubW.lbl("EMPTY", 9, Color(UITheme.TEXT_DIM, 0.6))
 			l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -128,7 +129,7 @@ func _roster_row(r: Dictionary) -> Control:
 	var xp_text := "MAX LEVEL" if lvl >= UnitDB.MAX_LEVEL else "%d/%d XP" % [int(r.xp), UnitDB.xp_to_next(lvl)]
 	xp_row.add_child(HubW.lbl(xp_text, 8, UITheme.TEXT_DIM))
 	info.add_child(xp_row)
-	info.add_child(HubW.clip(HubW.lbl(HubW.runner_stats_text(r), 9, UITheme.TEXT)))
+	info.add_child(HubW.clip(HubW.lbl(HubW.runner_stats_text(r, Game.fixer_stats()), 9, UITheme.TEXT)))
 	var cls: Dictionary = UnitDB.CLASSES[r.cls]
 	var skill := HubW.clip(HubW.lbl("%s: %s" % [cls.skill_name, cls.skill_desc], 9, col.lerp(UITheme.TEXT, 0.35)))
 	skill.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -165,7 +166,7 @@ func _trait_label(r: Dictionary) -> Label:
 func _toggle(id: String, btn: Control) -> void:
 	var was_in: bool = id in Game.squad
 	if not Game.toggle_squad(id):
-		hub.deny(btn, "Squad full (%d/%d). Bench someone first." % [Game.SQUAD_MAX, Game.SQUAD_MAX])
+		hub.deny(btn, "Squad full (%d/%d). Bench someone first." % [Game.squad_max(), Game.squad_max()])
 		HubFx.shake(_squad_row, 3.0)
 		return
 	var r := Game.get_runner(id)
@@ -194,7 +195,7 @@ func _build_hire() -> void:
 
 func _hire_row(i: int, r: Dictionary) -> Control:
 	var col := HubW.class_color(r.cls)
-	var cost := UnitDB.hire_cost(r)
+	var cost := Game.hire_cost(r)
 	var afford := Game.eddies >= cost
 	var p := HubW.panel(Color(col, 0.35), Color(0.05, 0.05, 0.11, 0.9), 1, 4)
 	var h := HubW.hbox(5)
@@ -204,7 +205,7 @@ func _hire_row(i: int, r: Dictionary) -> Control:
 	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info.add_child(HubW.clip(HubW.lbl(String(r.name), 10, UITheme.TEXT)))
 	info.add_child(HubW.lbl("%s  L%d" % [UnitDB.CLASSES[r.cls].name.to_upper(), int(r.level)], 9, col))
-	var s := UnitDB.runner_stats(r)
+	var s := Game.runner_stats(r)
 	info.add_child(HubW.clip(HubW.lbl("HP %d  DMG %s" % [int(s.hp), HubW._num(snappedf(float(s.dmg), 0.1))], 9, UITheme.TEXT_DIM)))
 	info.add_child(_trait_label(r))
 	h.add_child(info)
@@ -224,7 +225,7 @@ func _hire_row(i: int, r: Dictionary) -> Control:
 
 
 func _on_hire(i: int, r: Dictionary, btn: Control) -> void:
-	var squad_had_room := Game.squad.size() < Game.SQUAD_MAX
+	var squad_had_room := Game.squad.size() < Game.squad_max()
 	var nm := HubW.short_name(r)
 	var id: String = r.id
 	hub.flash_id = id

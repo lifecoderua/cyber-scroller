@@ -105,19 +105,21 @@ static func random_class(rng: RandomNumberGenerator) -> String:
 	return keys[rng.randi() % keys.size()]
 
 
-## Effective combat stats for a runner record.
-static func runner_stats(r: Dictionary) -> Dictionary:
+## Effective combat stats for a runner record. `bonus` carries fixer skill tree bonuses
+## (Game.fixer_stats(): runner_hp_pct, runner_armor, runner_crit, runner_haste).
+## Squad-wide damage % is applied by the mission (fixer dmg_pct), not here.
+static func runner_stats(r: Dictionary, bonus := {}) -> Dictionary:
 	var c: Dictionary = CLASSES[r.cls]
 	var t: Dictionary = TRAITS.get(r.get("trait", ""), {})
 	var lvl_mul := 1.0 + LEVEL_SCALE * (int(r.level) - 1)
 	return {
-		"hp": round(c.hp * lvl_mul * (1.0 + t.get("hp", 0.0))),
-		"armor": c.armor,
+		"hp": round(c.hp * lvl_mul * (1.0 + t.get("hp", 0.0) + float(bonus.get("runner_hp_pct", 0.0)))),
+		"armor": c.armor + float(bonus.get("runner_armor", 0.0)),
 		"dmg": c.dmg * lvl_mul * (1.0 + t.get("dmg", 0.0)),
-		"interval": c.interval * (1.0 + t.get("interval", 0.0)),
+		"interval": c.interval * (1.0 + t.get("interval", 0.0)) / (1.0 + float(bonus.get("runner_haste", 0.0))),
 		"range": c.range,
 		"melee": c.melee,
-		"crit": t.get("crit", 0.0),
+		"crit": t.get("crit", 0.0) + float(bonus.get("runner_crit", 0.0)),
 		"skill": c.skill,
 		"skill_cd": c.skill_cd,
 		"ram_regen_pct": c.get("ram_regen_pct", 0.0),
