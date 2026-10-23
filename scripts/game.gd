@@ -159,9 +159,9 @@ func extract_count() -> int:
 
 ## Everything the run and the fights read from the skill tree.
 func fixer_stats() -> Dictionary:
-	var keys := ["max_ram", "ram_regen_pct", "hack_pct", "heat_cap", "slots", "heat_decay_pct", "ram_on_kill",
-		"dmg_pct", "merc_hp_pct", "merc_armor", "merc_crit", "merc_haste", "patch_pct", "revive",
-		"enemy_hp_pct", "trace_pct", "bounty_pct", "start_eddies", "fence_disc", "skip_pct",
+	var keys := ["max_ram", "start_ram", "hack_power", "hack_disc", "heat_cap", "slots", "ram_on_kill",
+		"gear_dmg", "merc_hp", "rerolls", "front_shield", "blank_shield", "patch_pct", "revive",
+		"enemy_hp", "trace_pct", "bounty_pct", "start_eddies", "fence_disc", "skip_pct",
 		"loot_options", "subnet_bonus", "crew_offers", "reveal"]
 	var s := {}
 	for k in keys:

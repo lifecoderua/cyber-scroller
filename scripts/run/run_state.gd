@@ -15,9 +15,9 @@ const SKIP_ALL_BONUS := 6
 const PATCH_UP := 0.2           # fraction of max HP healed after each fight
 const DOWNED_HP := 0.25
 const FIGHT_TRACE := {"fight": 4.0, "elite": 6.0, "boss": 5.0, "ambush": 3.0}
+const ELITE_CHANCE := 0.3       # per threat level above 1: a regular wave gets an affixed enemy
 const ALERT_TRACE := 50.0       # from here corp security joins every wave
 const START_EDDIES := 40
-const DUO_BONUS := 50           # a 2-merc crew comes with extra cash
 const STASH_BASE := 4
 const SCRAP_FOR_OLD := 8        # €$ for gear replaced or removed
 const PRICES := {"treat": 25, "upgrade": 35}
@@ -43,7 +43,8 @@ var fixer := {}             # skill tree bonuses at run start (Game.fixer_stats(
 var phase := "draft"
 var drafts: Array = []      # crew offers: Array[Array[merc]]
 var crew: Array = []
-var threads: Array = []     # Array[Array[chip ref]], "" = empty slot
+var hacks: Array = []       # hack slots (chip refs, "" = empty)
+var daemons: Array = []     # daemon slots (chip refs, "" = empty)
 var spare: Array = []       # chips not slotted
 var trace := 0.0
 var eddies := 0
@@ -70,12 +71,12 @@ static func create(p_contract: Dictionary, p_fixer: Dictionary, seed := 0) -> Ru
 	r.threat = int(p_contract.get("threat", 1))
 	r.fixer = p_fixer
 	r.eddies = START_EDDIES + int(p_fixer.get("start_eddies", 0))
-	var slots := int(ChipDB.CHASSIS.slots) + int(p_fixer.get("slots", 0))
-	for row in ChipDB.STARTER_THREADS:
-		var t: Array = row.duplicate()
-		while t.size() < slots:
-			t.append("")
-		r.threads.append(t.slice(0, slots))
+	r.hacks = ChipDB.STARTER_HACKS.duplicate()
+	while r.hacks.size() < int(ChipDB.CHASSIS.hack_slots) + int(p_fixer.get("slots", 0)):
+		r.hacks.append("")
+	r.daemons = ChipDB.STARTER_DAEMONS.duplicate()
+	while r.daemons.size() < int(ChipDB.CHASSIS.daemon_slots):
+		r.daemons.append("")
 	r.spare = ChipDB.STARTER_SPARE.duplicate()
 	r._make_drafts()
 	r._make_map()
@@ -85,17 +86,15 @@ static func create(p_contract: Dictionary, p_fixer: Dictionary, seed := 0) -> Ru
 func _make_drafts() -> void:
 	drafts = []
 	var n := 3 + int(fixer.get("crew_offers", 0))
-	var full: bool = float(fixer.get("crew_offers", 0)) > 0.0
 	for i in n:
-		var size := 2 if i == 1 and not full else 3
 		var classes := []
-		while classes.size() < size:
+		while classes.size() < 3:
 			var c := UnitDB.random_class(rng)
 			if classes.count(c) < 1 or rng.randf() < 0.15:
 				classes.append(c)
 		var team := []
 		for c in classes:
-			var m := UnitDB.make_merc(c, rng)
+			var m := UnitDB.make_merc(c, rng, true, team.map(func(x): return UnitDB.short_name(x)))
 			if rng.randf() < 0.35:
 				var imps := ItemDB.all_ids().filter(func(id): return ItemDB.DEFS[id].slot == "implant" and ItemDB.DEFS[id].rarity != "rare")
 				m.implants.append(imps[rng.randi() % imps.size()])
@@ -108,8 +107,6 @@ func choose_draft(i: int, stash_item := "", stash_target := -1) -> bool:
 		return false
 	crew = drafts[i]
 	drafts = []
-	if crew.size() <= 2:
-		eddies += DUO_BONUS
 	if stash_item != "" and stash_target >= 0 and stash_target < crew.size():
 		var m: Dictionary = crew[stash_target]
 		if _equip(m, stash_item, -1, false):
@@ -213,21 +210,22 @@ func _weighted(w: Dictionary) -> String:
 func _make_waves(type: String, row: int) -> Array:
 	var depth := mini(5, threat + floori(row / 3.0))
 	var pool := UnitDB.enemy_pool(depth)
-	var n_waves := 2 if row < 3 else 3
-	if type == "elite":
-		n_waves = 3
+	var n_waves := 3 if type == "elite" else 2
 	var out := []
 	for w in n_waves:
-		var size := clampi(2 + floori((row + w) / 3.0) + (1 if threat >= 3 else 0), 2, 4)
+		var size := clampi(2 + floori((row + w) / 3.0) + floori(threat / 2.0), 2, 4)
 		var group := []
 		for k in size:
 			group.append(pool[rng.randi() % pool.size()])
 		# Swarm waves: gangers come in fours.
 		if rng.randf() < 0.25:
 			group = ["ganger", "ganger", "rusher", "ganger"].slice(0, mini(4, size + 1))
+		var aff: Array = UnitDB.AFFIXES.keys()
 		if type == "elite":
-			var aff: Array = UnitDB.AFFIXES.keys()
 			group[0] = "%s:%s" % [["netrunner", "esniper", "heavy", "grenadier"][w % 4], aff[rng.randi() % aff.size()]]
+		elif rng.randf() < ELITE_CHANCE * (threat - 1):
+			# Higher threat: regular waves bring affixed enemies too.
+			group[0] = "%s:%s" % [group[0], aff[rng.randi() % aff.size()]]
 		out.append(group)
 	if type == "boss":
 		out = [["ganger", "gunman", "drone"], ["shield", "netrunner", "rusher"], ["cyberpsycho", "gunman", "ganger"]]
@@ -426,7 +424,7 @@ func _rarity(bias: float) -> String:
 
 func _rand_chip(only_rarity: String, bias: float) -> String:
 	var want := only_rarity if only_rarity != "" else _rarity(bias)
-	var pool := ChipDB.all_ids().filter(func(id): return ChipDB.DEFS[id].rarity == want and id != "manual")
+	var pool := ChipDB.all_ids().filter(func(id): return ChipDB.DEFS[id].rarity == want)
 	if pool.is_empty():
 		pool = ChipDB.all_ids()
 	return pool[rng.randi() % pool.size()]
@@ -451,25 +449,51 @@ func _chip_offers(n: int, _theme: String) -> Array:
 	return out
 
 
-## What equipping `item` on merc i would do: {ok, text, warn, replaces}.
+## What equipping `item` on merc i would do: {ok, text, warn, replaces, change}.
+## `change` is the dice difference, e.g. "SHT2>PRC3 SHT3>PRC4" or "+DDG".
 func fit_preview(item: String, i: int) -> Dictionary:
 	var m: Dictionary = crew[i]
 	var d := ItemDB.get_def(item)
 	match String(d.get("slot", "")):
 		"weapon", "armor":
 			var cur := String(m.get(d.slot, ""))
-			return {"ok": true, "text": "replaces " + ItemDB.display_name(cur) if cur != "" else "free slot", "warn": false, "replaces": cur}
+			var after := m.duplicate(true)
+			after[d.slot] = item
+			return {"ok": true, "text": "replaces " + ItemDB.display_name(cur) if cur != "" else "free slot", "warn": false,
+				"replaces": cur, "change": dice_change(m, after)}
 		"implant":
 			var load := UnitDB.chrome_load(m) + int(d.chrome)
 			var over := load > UnitDB.chrome_cap(m)
 			var full: bool = m.implants.size() >= UnitDB.sockets(m)
 			if UnitDB.sockets(m) == 0:
-				return {"ok": false, "text": "no sockets", "warn": true, "replaces": ""}
+				return {"ok": false, "text": "no sockets", "warn": true, "replaces": "", "change": ""}
 			var t := "choose implant to replace" if full else "socket free"
+			var after := m.duplicate(true)
+			if not full:
+				after.implants.append(item)
 			if over and not full:
-				t = "OVER CAP %d/%d" % [load, UnitDB.chrome_cap(m)]
-			return {"ok": true, "text": t, "warn": over, "replaces": "?" if full else ""}
-	return {"ok": false, "text": "", "warn": false, "replaces": ""}
+				t = "OVER CAP %d/%d: glitch face" % [load, UnitDB.chrome_cap(m)]
+			return {"ok": true, "text": t, "warn": over, "replaces": "?" if full else "", "change": dice_change(m, after) if not full else ""}
+	return {"ok": false, "text": "", "warn": false, "replaces": "", "change": ""}
+
+
+## Short text of how a merc's dice change between two versions of the record.
+func dice_change(before: Dictionary, after: Dictionary) -> String:
+	var a := DiceDB.merc_dice(before, fixer)
+	var b := DiceDB.merc_dice(after, fixer)
+	var parts := []
+	for which in ["gear", "chrome"]:
+		for k in 6:
+			var fa: Dictionary = a[which][k]
+			var fb: Dictionary = b[which][k]
+			if DiceDB.tag(fa) != DiceDB.tag(fb) or int(fa.get("burn", 0)) != int(fb.get("burn", 0)):
+				var tb := DiceDB.tag(fb) + ("+burn" if int(fb.get("burn", 0)) > 0 else "")
+				parts.append("%s>%s" % [DiceDB.tag(fa), tb])
+	if int(b.hp) != int(a.hp):
+		parts.append("HP %+d" % (int(b.hp) - int(a.hp)))
+	if parts.is_empty():
+		return "no dice change"
+	return " ".join(parts.slice(0, 4)) + (" ..." if parts.size() > 4 else "")
 
 
 ## Equip gear on a merc. replace_index: implant slot to replace (-1 = append).
@@ -533,42 +557,33 @@ func crew_ports() -> Array:
 	return out
 
 
-## Put spare chip `spare_index` into a slot; whatever was there goes back to spare.
-func place_chip(thread: int, slot: int, spare_index: int) -> bool:
-	if thread < 0 or thread >= threads.size() or slot < 0 or slot >= threads[thread].size():
-		return false
+## The slot list for a chip kind ("hack" -> hacks, "daemon" -> daemons).
+func slots_of(k: String) -> Array:
+	return hacks if k == "hack" else daemons
+
+
+## Put spare chip `spare_index` into slot `slot` of its kind; whatever was there goes back to spare.
+func place_chip(slot: int, spare_index: int) -> bool:
 	if spare_index < 0 or spare_index >= spare.size():
 		return false
 	var ref: String = spare[spare_index]
-	var k := ChipDB.kind(ref)
-	if (slot == 0) != (k == "trigger"):
+	var list := slots_of(ChipDB.kind(ref))
+	if slot < 0 or slot >= list.size():
 		return false
 	spare.remove_at(spare_index)
-	var old: String = threads[thread][slot]
+	var old: String = list[slot]
 	if old != "":
 		spare.append(old)
-	threads[thread][slot] = ref
+	list[slot] = ref
 	return true
 
 
-func remove_chip(thread: int, slot: int) -> bool:
-	if thread < 0 or thread >= threads.size() or slot < 0 or slot >= threads[thread].size():
+func remove_chip(k: String, slot: int) -> bool:
+	var list := slots_of(k)
+	if slot < 0 or slot >= list.size() or list[slot] == "":
 		return false
-	var old: String = threads[thread][slot]
-	if old == "":
-		return false
-	threads[thread][slot] = ""
-	spare.append(old)
-	return true
-
-
-func swap_slots(thread: int, a: int, b: int) -> bool:
-	var t: Array = threads[thread]
-	if a <= 0 or b <= 0 or a >= t.size() or b >= t.size():
-		return false
-	var tmp: String = t[a]
-	t[a] = t[b]
-	t[b] = tmp
+	spare.append(list[slot])
+	list[slot] = ""
 	return true
 
 
@@ -688,21 +703,14 @@ func safehouse_heal() -> void:
 	complete_node()
 
 
-## Recompile: +1 tier on a chip. where: "spare:<i>" or "thread:<t>:<slot>".
+## Recompile: +1 tier on a chip. where: "spare:<i>", "hack:<i>" or "daemon:<i>".
 func safehouse_recompile(where: String) -> bool:
 	var p := where.split(":")
-	if p[0] == "spare":
-		var i := int(p[1])
-		if i < 0 or i >= spare.size() or ChipDB.tier(spare[i]) >= 2:
-			return false
-		spare[i] = ChipDB.upgraded(spare[i])
-	else:
-		var t := int(p[1])
-		var s := int(p[2])
-		var ref: String = threads[t][s]
-		if ref == "" or ChipDB.tier(ref) >= 2:
-			return false
-		threads[t][s] = ChipDB.upgraded(ref)
+	var list: Array = spare if p[0] == "spare" else slots_of(p[0])
+	var i := int(p[1])
+	if i < 0 or i >= list.size() or list[i] == "" or ChipDB.tier(list[i]) >= 2:
+		return false
+	list[i] = ChipDB.upgraded(list[i])
 	complete_node()
 	return true
 
@@ -786,14 +794,14 @@ func apply_effects(fx: Dictionary) -> Array:
 		out.append("New chip: %s." % ChipDB.display_name(c))
 	if fx.has("upgrade_chip"):
 		var cands := []
-		for t in threads.size():
-			for s in threads[t].size():
-				if threads[t][s] != "" and ChipDB.tier(threads[t][s]) < 2:
-					cands.append([t, s])
+		for list in [hacks, daemons]:
+			for k in list.size():
+				if list[k] != "" and ChipDB.tier(list[k]) < 2:
+					cands.append([list, k])
 		if not cands.is_empty():
 			var c: Array = cands[rng.randi() % cands.size()]
-			threads[c[0]][c[1]] = ChipDB.upgraded(threads[c[0]][c[1]])
-			out.append("%s recompiled." % ChipDB.display_name(threads[c[0]][c[1]]))
+			c[0][c[1]] = ChipDB.upgraded(c[0][c[1]])
+			out.append("%s recompiled." % ChipDB.display_name(c[0][c[1]]))
 	return out
 
 
@@ -835,7 +843,7 @@ func crew_items() -> Array:
 func to_dict() -> Dictionary:
 	return {
 		"rng_seed": rng.seed, "rng_state": rng.state, "contract": contract, "threat": threat, "fixer": fixer,
-		"phase": phase, "drafts": drafts, "crew": crew, "threads": threads, "spare": spare,
+		"phase": phase, "drafts": drafts, "crew": crew, "hacks": hacks, "daemons": daemons, "spare": spare,
 		"trace": trace, "eddies": eddies, "map": map, "pos": pos, "pending": pending,
 		"fights_won": fights_won, "kills": kills, "outcome": outcome, "stash_taken": stash_taken,
 		"last_fight": last_fight,
@@ -852,7 +860,8 @@ static func from_dict(d: Dictionary) -> RunState:
 	r.phase = String(d.get("phase", "map"))
 	r.drafts = d.get("drafts", [])
 	r.crew = d.get("crew", [])
-	r.threads = d.get("threads", [])
+	r.hacks = d.get("hacks", ChipDB.STARTER_HACKS.duplicate())
+	r.daemons = d.get("daemons", ChipDB.STARTER_DAEMONS.duplicate())
 	r.spare = d.get("spare", [])
 	r.trace = float(d.get("trace", 0.0))
 	r.eddies = int(d.get("eddies", 0))
