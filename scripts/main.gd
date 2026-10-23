@@ -1,26 +1,29 @@
 extends Node
-## Root scene: swaps between the hub (safehouse) and a mission.
+## Root scene: swaps between the hub (safehouse), the run (map and node screens) and a
+## fight (mission scene), as Game requests.
 
-const HUB_SCENE := "res://scenes/hub.tscn"
-const MISSION_SCENE := "res://scenes/mission.tscn"
+const SCENES := {
+	"hub": "res://scenes/hub.tscn",
+	"run": "res://scenes/run.tscn",
+	"fight": "res://scenes/mission.tscn",
+}
 
 var _current: Node
 
 
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(UITheme.BG)
-	Game.mission_requested.connect(func(): _show(MISSION_SCENE))
-	Game.mission_finished.connect(func(): _show(HUB_SCENE))
-	_show(HUB_SCENE)
+	Game.screen_requested.connect(_show)
+	_show(Game.start_screen())
 
 
-func _show(path: String) -> void:
+func _show(screen: String) -> void:
 	if _current:
 		_current.queue_free()
 		_current = null
-	var packed := load(path) as PackedScene
+	var packed := load(SCENES.get(screen, SCENES.hub)) as PackedScene
 	if packed == null:
-		push_error("Missing scene: %s" % path)
+		push_error("Missing scene: %s" % screen)
 		return
 	_current = packed.instantiate()
 	add_child(_current)

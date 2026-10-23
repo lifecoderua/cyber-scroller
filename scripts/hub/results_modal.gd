@@ -1,11 +1,12 @@
 extends PanelContainer
-## Mission debrief modal: glitchy outcome reveal, staggered rows, payout count-up.
+## Run debrief modal in the hub: glitchy outcome reveal, staggered rows, shard count-up.
 
 const GLYPHS := "#$%&*+=?@01<>/\\|_"
 const OUTCOMES := {
-	"success": ["SUCCESS", Color("4cff8f"), "Contract fulfilled. Client paid in full."],
-	"extracted": ["EXTRACTED", Color("f9c80e"), "Pulled out with the bag. No contract pay."],
-	"wiped": ["FLATLINED", Color("ff2a2a"), "Squad lost. The bag went down with them."],
+	"won": ["JOB DONE", Color("4cff8f"), "Target down. The client pays in data."],
+	"wiped": ["FLATLINED", Color("ff2a2a"), "The crew went down. A few shards survive."],
+	"traced": ["TRACED", Color("ff2a2a"), "Corp security found your deck."],
+	"abandoned": ["WALKED AWAY", Color("f9c80e"), "You pulled the plug."],
 }
 
 var hub: Control
@@ -27,17 +28,17 @@ func setup(h: Control, r: Dictionary) -> void:
 	_word = info[0]
 	_color = info[1]
 	add_theme_stylebox_override("panel", UITheme.box(Color(0.025, 0.025, 0.07, 0.97), _color, 2, 2, 12))
-	custom_minimum_size.x = 330
+	custom_minimum_size.x = 320
 
 	var v := HubW.vbox(3)
 	add_child(v)
-	var head := HubW.lbl("// JOB REPORT  THREAT %d" % int(r.get("threat", 1)), 9, UITheme.TEXT_DIM)
+	var head := HubW.lbl("// RUN REPORT  THREAT %d" % int(r.get("threat", 1)), 9, UITheme.TEXT_DIM)
 	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(head)
 	var job := HubW.wrap(HubW.lbl(String(r.get("title", "")), 10, UITheme.TEXT_DIM), 2)
 	job.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(job)
-	_title = HubW.lbl(_word, 30, _color)
+	_title = HubW.lbl(_word, 28, _color)
 	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_title.add_theme_constant_override("outline_size", 4)
 	v.add_child(_title)
@@ -46,41 +47,25 @@ func setup(h: Control, r: Dictionary) -> void:
 	v.add_child(sub)
 	v.add_child(HubW.line(Color(_color, 0.35)))
 
-	var wiped := String(r.get("outcome", "")) == "wiped"
-	var bag := int(r.get("bag", 0))
-	var reward := int(r.get("reward", 0))
-	_total_value = bag + reward
-	if wiped and bag > 0:
-		_row(v, "BAG (INSURED)", "+" + UITheme.format_eddies(bag), UITheme.YELLOW)
-	else:
-		_row(v, "BAG", "lost" if wiped else "+" + UITheme.format_eddies(bag), UITheme.RED if wiped else UITheme.YELLOW)
-	if reward > 0:
-		_row(v, "CONTRACT", "+" + UITheme.format_eddies(reward), UITheme.YELLOW)
+	_total_value = int(r.get("shards", 0))
+	_row(v, "FIGHTS WON", str(int(r.get("fights", 0))), UITheme.TEXT)
+	_row(v, "KILLS", str(int(r.get("kills", 0))), UITheme.TEXT)
+	_row(v, "FINAL TRACE", "%d%%" % int(r.get("trace", 0)), UITheme.PURPLE)
 	if int(r.get("rep", 0)) > 0:
 		_row(v, "REP", "+%d" % int(r.rep), UITheme.PURPLE)
-	if int(r.get("shards", 0)) > 0:
-		_row(v, "DATA SHARDS", "+%d" % int(r.shards), HubShard.COLOR.lightened(0.25))
-		var icon := HubShard.new(10)
-		var row: HBoxContainer = _rows[_rows.size() - 1]
-		row.add_child(icon)
-	var dur := float(r.get("duration", 0.0))
-	_row(v, "KILLS / TIME", "%d  /  %d:%02d" % [int(r.get("kills", 0)), floori(dur / 60.0), int(dur) % 60], UITheme.TEXT)
-	var drop := String(r.get("soft_drop", ""))
-	if drop != "":
-		var d := SoftDB.get_def(drop)
-		_row(v, "SOFT DROP", String(d.get("name", drop)), d.get("color", UITheme.CYAN))
-	var ups: Array = r.get("level_ups", [])
-	if not ups.is_empty():
-		_row(v, "LEVEL UP", ", ".join(ups), UITheme.CYAN)
-	var dead: Array = r.get("flatlined", [])
-	if not dead.is_empty():
-		_row(v, "FLATLINED", ", ".join(dead), UITheme.RED)
+	var ex: Array = r.get("extracted", [])
+	if not ex.is_empty():
+		_row(v, "TO STASH", ", ".join(ex.map(func(x): return ItemDB.display_name(x))), UITheme.YELLOW)
+	var crew: Array = r.get("crew", [])
+	if not crew.is_empty():
+		_row(v, "CREW", ", ".join(crew.map(func(n): return UnitDB.short_name({"name": n}))), UITheme.TEXT_DIM)
 
 	v.add_child(HubW.line(Color(_color, 0.35)))
 	var tot := HubW.hbox(6)
-	tot.add_child(HubW.lbl("TOTAL", 11, UITheme.TEXT_DIM))
+	tot.add_child(HubW.lbl("DATA SHARDS", 11, UITheme.TEXT_DIM))
 	tot.add_child(HubW.spacer())
-	_total = HubW.lbl(UITheme.format_eddies(0), 18, UITheme.YELLOW if _total_value > 0 else UITheme.TEXT_DIM)
+	tot.add_child(HubShard.new(12))
+	_total = HubW.lbl("0", 18, HubShard.COLOR.lightened(0.3))
 	tot.add_child(_total)
 	v.add_child(tot)
 	_continue = HubW.button("CONTINUE", _close, 13, _color, true)
@@ -104,18 +89,18 @@ func play() -> void:
 	for r in _rows:
 		r.modulate.a = 0.0
 	_continue.modulate.a = 0.0
-	var wiped := _word == "FLATLINED"
-	hub.screen_flash(_color, 0.5 if wiped else 0.3, 0.5)
+	var lost := String(res.get("outcome", "")) != "won"
+	hub.screen_flash(_color, 0.5 if lost else 0.3, 0.5)
 	Audio.play_result(res)
 	var t := create_tween().set_parallel(true)
 	t.tween_method(_reveal, 0.0, 1.0, 0.35)
 	for i in _rows.size():
 		t.tween_property(_rows[i], "modulate:a", 1.0, 0.12).set_delay(0.2 + i * 0.07)
 	var count_start := 0.25 + _rows.size() * 0.07
-	t.tween_method(func(x: float): _total.text = UITheme.format_eddies(int(round(x))), 0.0, float(_total_value), 0.45) \
+	t.tween_method(func(x: float): _total.text = str(int(round(x))), 0.0, float(_total_value), 0.45) \
 		.set_delay(count_start).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
 	t.tween_property(_continue, "modulate:a", 1.0, 0.15).set_delay(count_start)
-	if wiped:
+	if lost:
 		get_tree().create_timer(0.05).timeout.connect(func():
 			if is_inside_tree():
 				HubFx.shake(self, 7.0))

@@ -1,220 +1,189 @@
-# Cyber Scroller — Design (v0.1, vertical slice)
+# Cyber Scroller — Design (v0.2, portrait roguelite slice)
+
+Source idea and UI sketches: `_project_spaces/ideas__games/cyberpunk-fixer-sidescroller.md` and
+`cyberpunk-fixer-ui-sketches.md` (design draft v1). This document describes what the game implements.
 
 ## Pitch
-You are a **fixer / netrunner** who never sets foot on the street. You hire a squad of
-mercenaries ("runners"), load your cyberdeck with **soft** (programs), and send the squad
-through a side-scrolling district. Runners walk and fight on their own. You support them
-from the net: quickhacks, buffs, heals. Combat is real time with a long time-to-kill,
-paced like an idle game. **Using soft triggers an active pause**: time freezes while you
-pick a target, so every decision is deliberate, not a reflex.
+You are a **fixer / netrunner** who never sets foot on the street. For each job you jack into a crew of 2-3
+hired guns and support them through a **programmable cyberdeck** and **loot decisions**. The mercs move and
+fight on their own; you decide who gets which chrome, how the deck is wired, which node to take next, and
+when to spend a manual EXEC. Portrait, one-handed, web and mobile.
 
-Targets: **mobile (landscape, touch) and web**. 2D chunky pixel art, all procedural for
-now (see "Art"), so we ship no third-party assets yet.
+## Design pillars
+1. **You are the brain, not the gun.** All influence goes through the deck and the loot picks.
+2. **Chrome is an interface.** Implants open ports your deck can hook, and make mercs targets for enemy
+   netrunners. Over the chrome cap, mercs risk cyberpsychosis.
+3. **Rules over numbers.** Chips and implants add events, rules and verbs; stat sticks are the filler.
+4. **Readable auto-combat.** Enemies telegraph. Programs answer telegraphs automatically; EXEC covers the rest.
 
-## Core loop
+## Run structure
 ```
-SAFEHOUSE (hub)                               MISSION (side-scroller)
-  Contracts -> pick 1 of 3 ------------------>  squad auto-walks right
-  Crew      -> hire / pick squad (max 3/4)      encounters spawn ahead -> auto-combat
-  Deck      -> equip soft into slots            you cast soft (active pause + target)
-  Market    -> buy soft, deck upgrades          between encounters: EXTRACT or push on
-  Nodes     -> skill tree (Data Shards)
-       ^                                        boss guards the objective at the end
-       |------------- results: eddies, shards, rep, XP, loot <-------------'
+SAFEHOUSE (hub)                RUN (one contract)
+  JOBS  -> pick 1 of 3  ---->  crew draft: 1 of 3 random crews (+ optional stash item)
+  NET   -> skill tree          district map: 8 rows, 2-3 branches, target on top
+  STASH -> extracted gear      node -> fight / loot / shop / rest / event -> map ...
+     ^                         target down = job done: shards, rep, extract 1 item to stash
+     '------------ debrief ----'  (wipe or Trace 100% = run over, a few shards)
 ```
+- **Crew draft:** three offers; one of them is a 2-merc crew that comes with +50 €$. Mercs may come with an
+  implant. One stash item may ride along (lost if the run fails).
+- **Map:** row 0 is a fight, row 3 has an elite, row 6 is rest (safehouse / ripperdoc / fence), row 7 is the
+  target. Tapping a node shows intel (enemy roles per wave, loot theme, Trace cost) before you commit.
+- **Lose conditions:** the whole crew down in a fight, or **Trace reaches 100%**. Trace is the fixer's HP.
+- **Merc down:** at 0 HP a merc is down for the fight; afterwards they get up with a **scar** (-10% max HP for
+  the run). Survivors patch up 20% HP after each fight.
+- **Rep perk:** after 3 fights survived, a merc picks 1 of 2 archetype perks.
 
-### Push-your-luck
-- Kills drop **eddies** (€$) collected during the mission ("bag").
-- Between encounters (no enemies alive), you can **Extract**: keep the bag, forfeit the
-  contract reward, and the squad survives.
-- Clearing the boss = bag + contract reward + rep + a chance at a soft drop.
-- **Squad wipe** = the bag is lost and every runner on the mission **flatlines** (permadeath).
-- On success or extraction, downed runners pull through.
+### Node types
+| Node | What happens |
+|---|---|
+| Fight | 2-3 waves (more deeper in), then a loot pick |
+| Elite | 3 waves, one affixed elite per wave (Chromed / Shielded / Overclocked), +1 loot option |
+| Cache | Loot pick only, themed by location (street / clinic / armory / server room) |
+| Fence | Buy chips and gear for €$; hire a 3rd merc if the crew is short |
+| Ripperdoc | Treat scars, upgrade gear one tier, pull implants (+€$ scrap) |
+| Subnet | Take 1 of 3 chips, **or** scrub 18 Trace |
+| Safehouse | Heal the whole crew, **or** recompile one chip to tier II |
+| Event | Text choice with risk and reward (7 events) |
+| Target | Two guard waves, then the Cyberpsycho boss |
 
-## Time and active pause
-- The mission runs on its own simulation clock: `sim_dt = delta * speed`, where speed is
-  0 when paused, otherwise 1x / 2x / 3x. UI animations use real time.
-- Tapping a soft card that needs a target **pauses** the game (scanline overlay, cyan
-  tint) and highlights valid targets. Tapping a target casts it. Tapping the card again
-  or Cancel aborts. Afterwards the game resumes, unless manual pause was on.
-- Untargeted soft casts at once and adds a short 0.25 s hit-stop for impact.
-- **Manual pause** (button or Space) lets you queue several casts in one frozen moment.
-- Keyboard (web): `1..6` soft slots, `Space` pause, `Esc` cancel, `F` cycle speed.
+### Fixer resources
+- **RAM** (combat): regenerates; a thread's run costs the sum of its chips' RAM.
+- **Heat** (combat): +1 per payload (+ modifiers), decays over time. At the cap the deck **freezes** for 3 s
+  and Trace rises by 6. Caps combo spam.
+- **Trace** (whole run): +4 per fight (elite +6, target +5), +8 per enemy netrunner hack that lands, +12 per
+  Hijack, +6 per overheat, events. At **50%** corp security adds a gunman to every wave; at 100% the run is
+  burned. Lowered at subnets, by Stealth, and by the INTEL branch.
+- **Eddies (€$)** (whole run): kill bounties, scrap from skipped loot and replaced gear. Spent at the Fence
+  and the Ripperdoc.
 
-## Resources
-- **RAM**: the fixer's mana. Base max 10, regen 0.7/s. Every active soft costs RAM.
-- **Cooldown** per soft, in sim seconds.
-- **Charges**: a few heavy programs also have charges per mission (DnD style, refilled
-  at the safehouse).
-- **Deck slots**: cyberdeck Mk1 = 4 active + 2 passive. Upgrades in the Market.
+## Combat
+- **Side-view strip** on top of the screen: the crew on the left in formation (front / mid / back rows),
+  waves arrive from the right. Max ~4 enemies per wave; offscreen enemies get an arrow at the right edge.
+- Mercs auto-move and auto-attack; their **signature** fires on its own cooldown.
+- Damage: `taken = dmg * 10 / (10 + armor)`; hacks ignore armor. Breach strips armor and shields.
+- Speed 1x/2x/3x, manual pause. EXEC targeting runs at 25% speed (slow-mo, not a full pause).
 
-## Damage model
-- `taken = dmg * 10 / (10 + armor)` (armor 6 means 62.5 % gets through).
-- Soft damage (hacks) **ignores armor**, which makes hacks the answer to Heavies.
-- Crit: x1.75. Miss: Optics Jam gives enemies a miss chance.
-- Stun interrupts telegraphed casts (Netrunner hack, boss charge). **Interrupting is the
-  main skill expression.**
+### Mercs (5 archetypes)
+| Class | Row | Weapon | Signature | Sockets / chrome |
+|---|---|---|---|---|
+| Solo | front | blades (melee) | **Sandevistan**: dash through the line, 2x hits on 3 enemies (past shields) | 2 / 5 |
+| Borg | front | shotgun (cleave 1) | **Bulwark**: taunt nearby enemies, -50% damage taken for 4s | 3 / 7 |
+| Medtech | mid | SMG | **Stim**: heal the weakest ally 40 + haste 3s | 2 / 5 |
+| Techie | back | pistol | **Deploy**: a turret for 12s (an ally the deck can buff). +15% RAM regen | 2 / 5 |
+| Sniper | back | rifle (pierces shields) | **Mark**: next shot crits x2.5; target takes +30% from hacks | 1 / 4 |
 
-## Runners (hirelings)
-Level-1 stats; +12 % HP and damage per level. XP comes from missions (level cap 10).
+Traits (random): Chromehead, Analog (immune to enemy quickhacks), Glass Jaw, Show-off, Scavenger (+1 loot
+option), Loyal (never psycho), Old Wound.
 
-| Class   | HP  | Armor | Dmg | Interval | Range | Innate skill (auto, CD) |
-|---------|-----|-------|-----|----------|-------|-------------------------|
-| Solo    | 240 | 6     | 14  | 1.2      | 28    | **Gorilla Slam** (9 s): 30 dmg AoE r48 + taunt enemies 4 s |
-| Gunner  | 130 | 2     | 10  | 0.75     | 190   | **Burst Fire** (7 s): 4 rapid shots |
-| Medtech | 120 | 1     | 5   | 1.0      | 160   | **Trauma Kit** (5 s): heal lowest-HP% ally 35 |
-| Techie  | 140 | 3     | 7   | 0.9      | 170   | **Shock Grenade** (10 s): 25 dmg AoE r50 + stun 1 s. Passive: +20 % RAM regen |
+**Cyberpsychosis:** chrome load above capacity builds stress when the merc is hit. At max stress the merc
+goes psycho for 5 s: double damage, faster attacks, hits the nearest unit on either side, ignores the deck.
 
-Formation: Solo in front, others 22 px behind each other. Melee runners close in;
-ranged ones hold position.
+### Enemy roles (each asks a different question)
+| Role | Behaviour | Answers |
+|---|---|---|
+| Ganger | cheap melee swarm | AoE: Chain, Fork, Contagion |
+| Rusher | sprints past the front line to the back row | Bulwark taunt, Sonic knockback, focus fire |
+| Gunman | ranged, random targets | — |
+| Drone | flying, hijackable | Machine selector + Hijack |
+| Shieldbearer | frontal shield blocks 75% of gunfire | Breach, hacks, Sniper pierce, Sandevistan |
+| Sniper | 3 s aim (laser line), 70 dmg shot | Short Circuit / Sonic interrupt, Firewall the target |
+| Grenadier | 1.6 s lob at clustered mercs | Interrupt, kill first |
+| Netrunner | quickhacks the most chromed merc: burn + Trace | Interrupt, Firewall blocks it, Analog mercs |
+| Turret | static, hits hard, hijackable | Hijack (Trace) or burst |
+| Heavy | armored melee | Breach, hacks |
+| Cyberpsycho (boss) | Berserk Charge (2 s telegraph) on the front merc; enrages at 50% | Interrupts, tanking |
 
-**Traits** (0–1 per hire, random): *Chromed* (+25 % HP, +15 % cost), *Trigger-happy*
-(-20 % interval, -10 % dmg), *Cheap* (-30 % cost, -10 % HP), *Veteran* (starts at level 2),
-*Lucky* (10 % crit), *Glass Jaw* (-20 % HP, +20 % dmg, -20 % cost).
+## Cyberdeck
+Chassis **Street Mk.I**: 3 threads x 4 slots, 12 RAM (+1.1/s), Heat cap 8. A thread is
+`[Trigger] [chip] [chip] [chip]`, executed left to right when the trigger fires and the thread is off
+cooldown:
+- **Selectors (green)** set the target. If one finds nothing before any payload fired, the run aborts for
+  free and the thread waits (gambit-style conditions: `[Timer][Telegraphing][Short Circuit]`).
+- **Modifiers (blue)** stack onto the **next** payload.
+- **Payloads (red)** fire and consume the modifiers. RAM is charged when the first payload fires.
+- A payload with no fitting selector uses its default: the event's enemy or the front enemy for attacks,
+  the event's merc or the weakest ally for buffs.
+- **Cost** = chip RAM sum; **cycle** = chassis latency + chip latency (Timer: at least its interval);
+  **Heat** = +1 per payload + modifiers.
 
-**Hire cost** = `50 + 35 * level` × trait modifiers. The hire pool has 4 candidates;
-rerolling costs 20 €$. The pool refreshes for free after each mission.
+| Kind | Chips |
+|---|---|
+| Trigger (yellow) | Timer, Manual (EXEC), On Kill, Ally Hit, Ally Low, Telegraph, Wave Start, Signature, Overheat; **port triggers** On Dodge / On Knockback / On Blast (need a merc with the implant, else the thread is **dark**) |
+| Selector (green) | Front Enemy, Weakest, Telegraphing, Backline, Machine, Self-merc, Lowest Ally |
+| Modifier (blue) | Amplify, Fork, Chain, Echo, Compress, Stealth, Overclock, Persist |
+| Payload (red) | Ping, Short Circuit, Overheat (burn), Breach, Sonic Shock, Contagion, Hijack, Patch, Firewall, Overdrive |
 
-## Enemies
-Base stats at threat 1; +20 % HP and damage per threat level above 1.
+Chips have a tier II (Safehouse recompile, some events): payloads x1.4, triggers cycle faster, modifiers
+stronger. The starter deck teaches the three trigger families:
+`T1 [Timer][Front][Ping]`, `T2 [Ally Low][Self][Patch]`, `T3 [Manual][Telegraphing][Short Circuit]`.
 
-| Enemy     | HP   | Armor | Dmg | Int | Range | Speed | Bounty | Notes |
-|-----------|------|-------|-----|-----|-------|-------|--------|-------|
-| Ganger    | 140  | 0     | 9   | 1.1 | 24    | 32    | 6      | melee |
-| Gunman    | 110  | 1     | 7   | 1.0 | 170   | 26    | 7      | ranged |
-| Heavy     | 420  | 7     | 18  | 1.8 | 26    | 18    | 15     | melee, armored |
-| Drone     | 70   | 0     | 4   | 0.6 | 150   | 44    | 5      | flies (drawn higher), ranged |
-| Netrunner | 120  | 0     | 3   | 1.2 | 210   | 22    | 12     | every 8 s casts **Overheat** (1.5 s telegraph): 7 dps for 5 s on a random runner. Interruptible. |
-| Cyberpsycho (boss) | 2200 | 4 | 24 | 1.4 | 30 | 22 | 120 | every 12 s **Berserk Charge** (2 s telegraph): 70 dmg to frontmost runner. Interruptible. At <50 % HP: enrage, +40 % attack speed |
+**Manual threads:** tap EXEC -> slow-mo, valid targets pulse -> tap a target (it replaces the first
+selector), or AUTO / double-tap EXEC to use the thread's own selector.
 
-Targeting: melee enemies hit the taunter if any, otherwise the frontmost runner. Ranged
-enemies pick a random runner and keep the target for 3 s.
+**Visibility:** chip tiles light up as they run; every payload draws a line from its tile to the unit it hit;
+an interrupt draws a thick line from the thread to the telegraph it answered.
 
-## Soft (programs)
-Actives:
+## Loot and gear
+After each fight: pick **1 of N** (3; +1 elite, +1 per Scavenger, +1 Scavenger Net). Unpicked options turn
+into scrap €$; SKIP ALL pays a little more.
+- **Sources:** SALVAGE (gear from what you fought), SHARD (chips; more after killing netrunners, drones,
+  turrets), LOCATION (by node theme).
+- **Kill method:** if most kills were burn ticks, one salvage card is fried scrap instead of gear.
+- **Crew and deck compete for the same pick.** Items show a fit preview per merc (free slot, replaces X,
+  OVER CAP, choose implant to replace).
+- **Slots:** weapon, armor, implants (sockets by archetype). 19 items; implants cost chrome; three implants
+  carry port events (Kerenzikov: On Dodge, Gorilla Arms: On Knockback, Projectile Launcher: On Blast).
 
-| id | Name | RAM | CD | Charges | Target | Effect |
-|----|------|-----|----|---------|--------|--------|
-| short_circuit | Short Circuit | 4 | 5 | – | enemy | 45 dmg, stun 1.5 s |
-| nano_patch | Nano-Patch | 3 | 6 | – | ally | heal 70, then 5 HP/s for 4 s |
-| overclock | Overclock | 3 | 10 | – | ally | +60 % attack speed for 8 s |
-| weapon_glitch | Weapon Glitch | 3 | 8 | – | enemy | -60 % dmg for 8 s |
-| contagion | Contagion | 5 | 12 | – | enemy | 8 dps for 6 s; also hits enemies within 70 px |
-| firewall | Firewall | 6 | 18 | – | none | all runners: 50 shield for 10 s |
-| synapse_burnout | Synapse Burnout | 7 | 14 | – | enemy | 80 dmg, x2 if target <40 % HP |
-| optics_jam | Optics Jam | 4 | 14 | – | none | all enemies 50 % miss for 6 s |
-| smart_link | Smart Link | 4 | 12 | – | ally | 100 % crit for 6 s |
-| cyberpsychosis | Cyberpsychosis | 8 | 25 | – | enemy (non-boss) | target fights its allies for 8 s |
-| system_collapse | System Collapse | 10 | 0 | 1 | enemy | kills a non-boss; 300 dmg to a boss |
+## UI (portrait 360x640, one-handed)
+- Interactive elements live in the bottom ~60%: crew cards, thread rows with EXEC, prompts, footers.
+- Fight: top bar (Trace, RAM, Heat, speed, pause, wave pips) / battle strip / crew cards / 3 thread rows /
+  hint or targeting prompt. Tap a unit for an intel sheet (pauses).
+- Run: header (contract, €$, Trace, node) / current screen / footer (CREW, DECK, menu).
+- Deck editor: thread board with a live **dry-run readout** and warnings, spare-chip drawer with kind
+  filters. Tap a chip, then a slot.
+- Hub: JOBS / NET / STASH tabs at the bottom.
 
-Passives (daemons):
-
-| id | Name | Effect |
-|----|------|--------|
-| ram_expansion | RAM Expansion | +3 max RAM |
-| turbo_coprocessor | Turbo Coprocessor | +30 % RAM regen |
-| targeting_uplink | Targeting Uplink | runners +15 % dmg |
-| biomonitor | Biomonitor | runners regen 1.5 HP/s |
-| data_siphon | Data Siphon | each kill restores 1 RAM |
-| ice_sentry | ICE Sentry | every 4 s: 12 dmg to a random enemy (ignores armor) |
-| bounty_scraper | Bounty Scraper | +25 % eddies from kills |
-| kiroshi_link | Kiroshi Link | hacks deal +25 % dmg |
-| autopilot | Autopilot Daemon | when RAM is full, auto-casts the first ready active soft on a sensible target (idle play) |
-
-Starting kit: Short Circuit, Nano-Patch, Overclock, RAM Expansion. 300 €$. Two free
-runners (Solo, Gunner).
-
-## Contracts
-- 3 offers, regenerated after each mission. Threat level 1..min(5, 1 + rep/4).
-- Encounters = `3 + threat`, plus a boss at the end.
-- Each encounter is 2–5 enemies drawn from a pool that widens with threat.
-- Reward = `120 * threat` + random ±20 %. Rep on success = `threat`.
-- Flavor: a client, a target corp or gang, a district (Kabuki, Watson Docks, Glen Spire, Neon Row).
-
-## Market
-- 4 random soft offers (not yet owned), refreshed after each mission. Price by rarity:
-  common 150, uncommon 300, rare 550.
-- Upgrades: +1 active slot (400, then 800), +1 passive slot (500, then 1000).
-
-## Fixer skill tree ("the net", meta progression)
-A Nodebuster-style node graph in the hub's **NODES** tab. Ranks are permanent and survive
-wipes, so every job, even a failed one, moves the fixer forward.
-
-### Data Shards (◆)
-A second currency, shown in the hub header next to eddies and in the job report.
-
-| Outcome | Shards |
-|---------|--------|
-| Success | 1 per regular fight cleared + boss bonus `3 + floor((threat-1)/2)` (3..5) + Boss Dossier |
-| Extracted | 1 per regular fight cleared |
-| Wiped | `max(1, floor(fights cleared / 2))` |
-
-Then × (1 + shard bonus), rounded. A threat-1 success pays 7 (enough for the Core and three
-tier-1 ranks), a threat-5 success pays 13.
-
-### Graph
-Central **Fixer Core** (1 ◆, +1 max RAM) unlocks four branches radiating into the four
-quadrants. Each branch has the same shape: two tier-1 nodes off the core (5 ranks,
-2/3/5/8/12 ◆), three tier-2 nodes, two tier-3 nodes and a **capstone** (40 ◆) that needs
-two tier-2/3 nodes. A node is buyable when all its prerequisites have at least one rank.
-33 nodes, 93 ranks, roughly 900 ◆ for everything (dozens of jobs, idle pacing).
+## Meta progression
+- **Data Shards:** won run = fights won - 1 + 3 + (threat - 1) (+ Boss Dossier), failed run =
+  max(1, fights / 2) (+ Insurance); x (1 + Data Miner / Oracle Feed).
+- **Rep:** + threat on a won run; max contract threat = 1 + rep / 4 (+ Rep Broker), up to 5.
+- **Stash:** 4 slots (+ Stash Locker); extract 1 item per won run (2 with Fixer Empire).
+- **Skill tree (NET tab):** 33 nodes in four branches.
 
 | Branch | Nodes |
-|--------|-------|
-| NETRUNNING (cyan, up-left) | RAM Buffer +1 max RAM/rank · Overclocked Bus +6 % RAM regen · ICEbreaker +8 % hack dmg · Warm Boot: start missions with full RAM · Cryo Cooling -6 % soft CD · Spare Cartridge +1 charge for charged soft · Autopilot v2: daemon casts at 85 % / 70 % RAM · **Neural Overflow**: +2 max RAM, kills give 0.5 RAM |
-| STREET CRED (magenta, up-right) | Smart Ammo +5 % runner dmg · Subdermal Armor +6 % runner HP · Combat Stims +3 % crit · Plated Chrome +1 armor · Ripperdoc on Call +50 % patch-up between fights · Kerenzikov +5 % attack speed · Trauma Team: the first runner to drop is pulled back at 30 % HP (once per mission) · **Full Crew**: +1 squad slot (4 runners) |
-| FIXER BUSINESS (yellow, down-right) | Bounty Board +8 % kill eddies · Haggler +6 % contract pay · Fence Contacts -7 % soft prices · Recruiter Network -8 % hire cost · Side Gigs: offline income 1/2/4 €$ per minute · Insurance Policy: keep 25 % / 50 % of the bag on a wipe · Talent Scout +1 hire candidate · **Fixer Empire**: +10 % kill eddies, +10 % contract pay, side gigs pay up to 12 h |
-| INTEL (green, down-left) | Mentorship +10 % XP · Data Miner +10 % shards · Loot Scanner +8 % soft drop chance · Wider Network: 4th contract offer · Recon Drones: enemies spawn with -4 % HP · Rep Broker: +1 max threat (cap 5) · Boss Dossier +1 shard per boss · **Oracle Feed**: +25 % shards, +20 % drop chance |
+|---|---|
+| NETRUNNING (cyan) | RAM Buffer, Overclocked Bus (RAM regen), ICEbreaker (payload power), Warm Boot (full RAM at fight start), Heat Sink, Wide Bus (+1 slot per thread), Cooling Loop (Heat decay), **Neural Overflow** |
+| STREET CRED (magenta) | Smart Ammo, Subdermal Mesh, Combat Stims, Plated Chrome, Ripperdoc on Call (patch-up), Kerenzikov Lite (haste), Trauma Team (once per fight revive), **Pick of the Litter** (+1 crew offer, all crews of 3) |
+| STREET BIZ (yellow) | Bounty Board, Seed Money (start €$), Fence Contacts (prices), Salvager (skip value), Scavenger Net (+1 loot option), Insurance Policy (failed-run shards), Stash Locker, **Fixer Empire** |
+| INTEL (green) | Trace Scrubber, Data Miner, Subnet Mastery, Wider Network (4th contract), Recon Drones (enemy HP), Rep Broker, Boss Dossier, **Oracle Feed** (reveals the map, -Trace gain) |
 
-### Side gigs (offline income)
-Every save stamps `last_seen_unix`. On load (and on app resume on mobile) the time away is
-paid at the Side Gigs rate, capped at 8 h (12 h with Fixer Empire), if the player was gone
-at least 2 minutes. The amount waits in `offline_pending` (saved) until the hub's
-"WHILE YOU WERE AWAY" popup is collected, which counts the eddies up into the header.
+## Balance snapshot (tools/sim_mission.gd, 24 runs per cell, no skill tree)
+| Threat | idle (never EXECs) | bot (EXECs on its own selector) |
+|---|---|---|
+| 1 | 79% | 87% |
+| 2 | 37% | 79% |
+| 3 | 8% | 50% |
+| 4-5 | 0% | 4-12% |
 
-### UI
-- Graph: dot grid, locked nodes dim grey, reachable nodes outlined in the branch color with
-  a price tag, affordable ones pulse, bought nodes fill up per rank and connect with glowing
-  edges carrying data packets, maxed nodes glow solid. Multi-rank nodes show rank pips.
-  Capstones are diamonds, the core a hexagon.
-- Drag pans (mouse or touch, with inertia, clamped to the content), tap selects (generous
-  hit radius), CENTER recenters. The right panel shows branch, name, rank pips, description,
-  NOW / NEXT effect lines, missing prerequisites, cost and a BUY / UPGRADE button.
-- Buying: ring burst and sparks on the node, light runs down the edges to newly opened
-  nodes, a small screen flash, a toast and a shard counter float. Failing: shake + toast.
-- The NODES tab label shows "+" while something is affordable.
+With a mid skill tree (~30 runs of shards) the bot wins 66-87% at threat 3-5. Fights last 40-60 s.
 
-### Implementation
-- `TreeDB` (`scripts/data/tree_db.gd`): node table (branch, cost per rank, prerequisites,
-  graph position, per-rank effects) plus helpers.
-- `Game`: `shards`, `tree_ranks`, `last_seen_unix`, `offline_pending`; API `tree_rank`,
-  `tree_bonus(key)` (sum of all node effects), `node_state`, `can_buy_node`, `buy_node`,
-  and tree-aware helpers `squad_max`, `hire_cost`, `soft_price`, `hire_pool_size`,
-  `contract_count`, `max_threat`, `runner_stats`.
-- Mission-side bonuses travel in `Game.fixer_stats()` (RAM, regen, cooldown, hack dmg,
-  full RAM start, charges, autopilot threshold, runner HP / armor / crit / haste, patch-up,
-  revive, enemy HP). `UnitDB.runner_stats(r, bonus)` applies the runner part, so the hub
-  shows the same numbers the mission uses. Economy bonuses apply in `Game.finish_mission`.
-- Save version 2; version-1 saves load with the new keys at their defaults.
-
-## Art direction
-- Viewport 640x360, canvas_items stretch, nearest filter. Pixel sprites are 16x24 and
-  drawn at x2.
-- Night city: far skyline with lit windows, mid layer with neon signs, wet street with
-  reflections, rain. Palette: deep navy and violet, neon cyan `#2de2e6`, magenta
-  `#ff3d81`, yellow `#f9c80e`.
-- All sprites come from ASCII templates in code (`PixelSprites`), palette-swapped per
-  class and enemy. They can be replaced with CC0 packs later.
+## Out of scope for this slice (from the design draft)
+Daemons, zero-days, enemy ICE / junk-chip injection, the Bus chip, Ghost / Reboot / Purge payloads, extra
+mission types (hold, escort), Nomad / Face / Street runner archetypes, a district per faction.
 
 ## Code layout
 ```
-scripts/game.gd            autoload "Game": persistent state, save/load, contracts, economy
-scripts/data/soft_db.gd    SoftDB: soft definitions
-scripts/data/unit_db.gd    UnitDB: runner classes, enemies, traits, names
-scripts/data/tree_db.gd    TreeDB: fixer skill tree nodes
-scripts/art/pixel_sprites.gd  PixelSprites: procedural pixel art textures (cached)
-scripts/ui/ui_theme.gd     UITheme: shared neon Theme + color constants
-scripts/main.gd            switches between hub and mission scenes
-scenes/hub.tscn            safehouse UI (contracts, crew, deck, market, nodes, results)
-scenes/mission.tscn        side-scrolling mission
+scripts/game.gd               autoload "Game": meta (shards, rep, tree, stash), contracts, save, screens
+scripts/run/run_state.gd      RunState: draft, map, fights, loot, node actions, perks (plain data + rules)
+scripts/run/run_screen.gd     run scene: header / footer, draft, map, previews, perk picks
+scripts/run/*_view.gd         map, loot, node screens, deck editor, crew sheet, run over
+scripts/mission/combat_sim.gd CombatSim: 1D fight simulation (mercs, enemy roles, telegraphs, waves)
+scripts/mission/deck_engine.gd DeckEngine: threads, RAM, Heat, payloads, manual EXEC
+scripts/mission/mission.gd    fight scene: battle strip + HUD (crew cards, thread rows, EXEC)
+scripts/data/                 ChipDB, UnitDB (mercs, enemies, traits, perks), ItemDB, EventDB, TreeDB
+scripts/hub/                  safehouse: JOBS, NET (skill tree graph), STASH, debrief
+scripts/ui/                   theme, ScreenBase (toasts / modals), ChipTile, MeterBar
 ```
+Save version 3 (`user://save.json`): meta plus the active run, saved after every step. Version 1-2 saves keep
+shards, rep and the skill tree.

@@ -1,60 +1,54 @@
 class_name CombatSim
 extends RefCounted
-## Pure combat simulation for a mission (no nodes, no rendering).
+## Pure combat simulation for one fight node (no nodes, no rendering).
 ##
-## World is 1D: every unit has an x along the street (runners walk right, enemies come
-## from the right). Flying units only differ visually. The view reads `units`, `ram`,
-## `slots` etc. every frame and drains `pop_events()` for juice.
+## World is 1D: every unit has an x along the street (the crew stands on the left in
+## formation, enemies arrive from the right in waves). Flying units only differ visually.
+## The fixer never fights: all player influence goes through `deck` (DeckEngine), which
+## listens to sim events (kills, hits, telegraphs...) and fires payloads back into the sim.
 ##
 ## Usage:
 ##   var sim := CombatSim.new()
-##   sim.setup(contract, runner_dicts, deck_active_ids, fixer_stats, seed)
-##   sim.step(dt)                      # dt in sim seconds
-##   sim.cast(slot, target_id)         # target_id = -1 for untargeted soft
-##   sim.extract()                     # only when sim.can_extract()
+##   sim.setup(fight, crew_dicts, threads, fixer_stats, seed)
+##   sim.step(dt)                         # dt in sim seconds
+##   sim.deck.execute(thread, target_id)  # manual threads (target -1 = thread's own selector)
 ##
-## Events are dictionaries with a "type" key:
-##   attack {src, target, ranged, missed}       damage {target, amount, crit, kind, src, color}
-##   heal {target, amount, quiet}                miss {target}
-##   death {unit}                                loot {unit, amount}
-##   cast {slot, soft, target, color}            skill {unit, skill, x, radius, target}
-##   telegraph {unit, name, duration, target}    interrupt {unit}
-##   cast_fire {unit, target, name}              enrage {unit}
-##   status {unit, text, color}                  ice {target}
-##   encounter_start {index, boss}               encounter_cleared {index, boss}
-##   outcome {outcome}
+## Events (pop_events) are dictionaries with a "type" key:
+##   attack {src, target, ranged, missed}     damage {target, amount, crit, kind, src, color, absorbed}
+##   heal {target, amount, quiet}              miss {target} dodge {unit}
+##   death {unit, src}                         loot {unit, amount}
+##   skill {unit, skill, x, radius, targets}   telegraph {unit, name, duration, target}
+##   interrupt {unit, thread}                  cast_fire {unit, target, name, blocked}
+##   enrage {unit}  status {unit, text, color} psycho {unit}  spawn {unit}
+##   wave_start {index, total, boss}           wave_cleared {index}
+##   payload {thread, slot, chip, targets, color}   thread_run {thread}   thread_fail {thread, reason}
+##   overheat {}  trace {amount, reason}       outcome {outcome}
 
 const WALK_SPEED := 40.0
-const FORMATION_GAP := 22.0
-const FIRST_ENCOUNTER_GAP := 120.0
-const ENCOUNTER_GAP := 260.0
-const DEFAULT_SPAWN_AHEAD := 430.0
-const ENGAGE_DIST := 205.0  # squad halts when an enemy gets this close to the front runner
+const FORMATION_GAP := 26.0
+const WAVE_WALK := 70.0          # crew walks this far between waves
+const FIRST_WAVE_DELAY := 0.8
+const WAVE_DELAY := 1.4
+const DEFAULT_SPAWN_AHEAD := 240.0
+const ENGAGE_DIST := 200.0       # crew halts when an enemy gets this close to the front merc
+const BACKLINE_STAND := 175.0    # backline enemies stop this far from the front merc
 const BASE_CRIT := 0.05
 const CRIT_MULT := 1.75
 const MAX_STEP := 0.05
 const DOT_TICK := 0.5
 const HEAL_TICK := 1.0
 const RANGED_LOCK := 3.0
-const BURST_GAP := 0.12
-const START_RAM_PCT := 0.6
-const PATCH_UP_PCT := 0.025  # runners recover this fraction of max HP per second between fights
-const REVIVE_PCT := 0.3  # Trauma Team revive HP
+const REVIVE_PCT := 0.3
+const PSYCHO_TIME := 5.0
+const STRESS_PER_CHROME := 6.0
+const MARK_TIME := 6.0
+const MARK_VULN := 0.3
+const CHAIN_RANGE := 90.0
+const FORK_RANGE := 120.0
+const TRACE_LIMIT := 100.0
 
-# --- balance knobs (mission side; data tables stay as in DESIGN.md) ---------------
-const ENEMY_HP_MUL := 1.8
-const ENEMY_DMG_MUL := 0.6
-const BOSS_HP_MUL := 0.5
-const BOSS_DMG_MUL := 1.6
-## Softens UnitDB's +20%/threat HP growth so high-threat fights stay ~20-35 s.
-const THREAT_HP_DAMPEN := 0.06
-const NETRUNNER_FIRST_CAST := 3.0
-const BOSS_FIRST_CAST := 6.0
-
-const RUNNER := 0
+const MERC := 0
 const ENEMY := 1
-
-const CLASS_ORDER := ["solo", "gunner", "techie", "medtech"]
 
 
 class Unit:
@@ -64,7 +58,8 @@ class Unit:
 	var kind := ""
 	var name := ""
 	var seed := 0
-	var runner_id := ""
+	var merc_id := ""
+	var row := 0
 	var max_hp := 1.0
 	var hp := 1.0
 	var armor := 0.0
@@ -75,39 +70,51 @@ class Unit:
 	var speed := 40.0
 	var flying := false
 	var boss := false
+	var machine := false
+	var static_unit := false
+	var rusher := false
+	var backline := false
 	var bounty := 0
 	var crit := 0.0
-	var lvl_mul := 1.0
 	var x := 0.0
 	var lane := 0.0
 	var alive := true
-	var encounter := -1
+	var wave := -1
 	var order := 0
 	var target := -1
 	var target_lock := 0.0
 	var atk_timer := 0.0
+	var attacks := 0
 	var skill := ""
 	var skill_cd := 0.0
 	var skill_timer := 0.0
-	var burst_left := 0
-	var burst_timer := 0.0
 	var stun := 0.0
 	var taunt_by := -1
 	var taunt_t := 0.0
 	var shield := 0.0
 	var shield_t := 0.0
-	var dots: Array = []  # {dps, t, color}
+	var firewall := false        # blocks the next enemy quickhack
+	var front_shield := 0.0      # Shieldbearer: fraction of gunfire blocked
+	var breach_t := 0.0
+	var vuln := 0.0
+	var mark_t := 0.0
+	var mark_ready := false
+	var infect_t := 0.0
+	var infect_blast := 0.0
+	var infect_radius := 0.0
+	var dots: Array = []  # {dps, t, color, key}
 	var hots: Array = []  # {hps, t}
 	var dot_tick := DOT_TICK
 	var heal_tick := HEAL_TICK
 	var haste := 0.0
 	var haste_t := 0.0
-	var weaken := 0.0
-	var weaken_t := 0.0
-	var miss := 0.0
-	var miss_t := 0.0
-	var crit_t := 0.0
+	var dr := 0.0
+	var dr_t := 0.0
 	var psycho_t := 0.0
+	var stress := 0.0
+	var hijack_t := 0.0
+	var life_t := -1.0           # summoned turret lifetime
+	var owner := -1
 	var cast_def := {}
 	var cast_name := ""
 	var cast_t := 0.0
@@ -118,8 +125,13 @@ class Unit:
 	var moving := false
 	var engaged := false
 	var stop_jitter := 0.0
-	var body := 0.0  # extra half-width for big units (boss)
+	var body := 0.0
 	var death_time := 0.0
+	var affix := ""
+	var stats := {}              # merc rule stats (UnitDB.merc_stats)
+	var dodge_timer := 0.0
+	var emergency_used := false
+	var killed_by := ""
 
 	func hp_pct() -> float:
 		return clampf(hp / max_hp, 0.0, 1.0)
@@ -127,93 +139,99 @@ class Unit:
 	func is_casting() -> bool:
 		return cast_name != ""
 
+	## Which side the unit fights for right now (hijacked machines switch sides).
+	func side() -> int:
+		if team == ENEMY and hijack_t > 0.0:
+			return MERC
+		return team
+
 	func attack_interval() -> float:
 		var h := 1.0 + (haste if haste_t > 0.0 else 0.0)
 		if enraged:
 			h += float(cast_def.get("enrage_haste", 0.0))
+		if psycho_t > 0.0:
+			h += 0.5
 		return interval / h
 
-	func centre_y_offset() -> float:
-		return 48.0 if flying else 0.0
+	func ports() -> Array:
+		var out := []
+		if stats.get("dodge_cd", 0.0) > 0.0:
+			out.append("dodge")
+		if int(stats.get("knock_every", 0)) > 0:
+			out.append("knock")
+		if int(stats.get("blast_every", 0)) > 0:
+			out.append("blast")
+		return out
 
 
 var rng := RandomNumberGenerator.new()
-var contract := {}
+var fight := {}
 var fixer := {}
 var threat := 1
-var units: Array = []  # all units, including dead ones (view keeps corpses)
+var units: Array = []
 var _by_id := {}
 var _next_id := 1
-var slots: Array = []  # {id, def, cd_t, charges}
-var ram := 0.0
-var max_ram := 10.0
-var ram_regen := 0.7
+var deck: DeckEngine
 var time := 0.0
-var anchor := 0.0  # squad formation anchor (front runner target position)
+var anchor := 0.0
 var spawn_ahead := DEFAULT_SPAWN_AHEAD
-var encounters: Array = []
-var next_encounter := 0
-var active_encounter := -1
-var encounters_cleared := 0
-var next_spawn_x := FIRST_ENCOUNTER_GAP
+var waves: Array = []
+var wave := -1             # index of the active wave, -1 between waves
+var next_wave := 0
+var wave_timer := FIRST_WAVE_DELAY
+var walk_target := 0.0
 var kills := 0
+var fried_kills := 0
+var killed_kinds: Array = []
 var bag := 0
 var outcome := ""
-var ice_timer := 4.0
 var events: Array = []
-var casts_made := 0
 var interrupts := 0
-var revives_left := 0  # Trauma Team charges (skill tree)
-var revives_used := 0
+var revives_left := 0
+var trace := 0.0           # run Trace, live (starts at the run's value)
+var trace_start := 0.0
 
 
-func setup(p_contract: Dictionary, runners: Array, deck_active: Array, p_fixer: Dictionary, seed := 0) -> void:
+func setup(p_fight: Dictionary, crew: Array, threads: Array, p_fixer: Dictionary, seed := 0) -> void:
 	if seed != 0:
 		rng.seed = seed
 	else:
 		rng.randomize()
-	contract = p_contract
+	fight = p_fight
 	fixer = p_fixer
-	threat = int(contract.get("threat", 1))
-	encounters = contract.get("encounters", [])
-	max_ram = float(fixer.get("max_ram", 10.0))
-	ram_regen = float(fixer.get("ram_regen", 0.7))
-	ram = max_ram * (1.0 if fixer.get("full_ram", false) else START_RAM_PCT)
+	threat = int(fight.get("threat", 1))
+	waves = fight.get("waves", [])
+	trace = float(fixer.get("trace", 0.0))
+	trace_start = trace
 	revives_left = int(fixer.get("revive", 0))
-	ice_timer = 4.0
-	for id in deck_active:
-		var d := SoftDB.get_def(id)
-		if d.is_empty():
-			continue
-		var ch := int(d.get("charges", 0))
-		if ch > 0:
-			# Spare Cartridge (skill tree): extra charges for limited soft.
-			ch += int(fixer.get("charges", 0))
-			d = d.duplicate()
-			d.charges = ch
-		slots.append({"id": id, "def": d, "cd_t": 0.0, "charges": ch})
-	# Runners: melee first, then by class order.
-	var sorted := runners.duplicate()
-	sorted.sort_custom(func(a, b): return CLASS_ORDER.find(a.cls) < CLASS_ORDER.find(b.cls))
+	var sorted := crew.duplicate()
+	sorted.sort_custom(func(a, b): return int(UnitDB.CLASSES[a.cls].row) < int(UnitDB.CLASSES[b.cls].row))
 	for i in sorted.size():
-		_add_runner(sorted[i], i)
+		_add_merc(sorted[i], i)
 	anchor = 0.0
+	walk_target = 0.0
 	for u in units:
 		u.x = anchor - u.order * FORMATION_GAP
+	deck = DeckEngine.new()
+	deck.setup(self, threads, fixer)
 
 
-func _add_runner(r: Dictionary, order: int) -> Unit:
-	var s := UnitDB.runner_stats(r, fixer)
+func _add_merc(m: Dictionary, order: int) -> Unit:
+	var s := UnitDB.merc_stats(m, fixer)
+	s["chrome_load"] = UnitDB.chrome_load(m)
+	s["chrome_over"] = maxi(0, UnitDB.chrome_load(m) - UnitDB.chrome_cap(m))
 	var u := Unit.new()
 	u.id = _next_id
 	_next_id += 1
-	u.team = RUNNER
-	u.kind = r.cls
-	u.name = r.name
-	u.seed = int(r.get("seed", 0))
-	u.runner_id = str(r.get("id", ""))
+	u.team = MERC
+	u.kind = m.cls
+	u.name = m.name
+	u.seed = int(m.get("seed", 0))
+	u.merc_id = str(m.get("id", ""))
+	u.row = int(UnitDB.CLASSES[m.cls].row)
+	u.stats = s
 	u.max_hp = s.hp
-	u.hp = s.hp
+	u.hp = maxf(1.0, s.hp * clampf(float(m.get("hp_pct", 1.0)), 0.0, 1.0))
 	u.armor = s.armor
 	u.dmg = s.dmg
 	u.interval = s.interval
@@ -221,10 +239,10 @@ func _add_runner(r: Dictionary, order: int) -> Unit:
 	u.melee = s.melee
 	u.speed = WALK_SPEED
 	u.crit = s.crit
-	u.lvl_mul = 1.0 + UnitDB.LEVEL_SCALE * (int(r.get("level", 1)) - 1)
+	u.dr = s.dr
 	u.skill = s.skill
 	u.skill_cd = s.skill_cd
-	u.skill_timer = s.skill_cd * rng.randf_range(0.3, 0.6)
+	u.skill_timer = s.skill_cd * rng.randf_range(0.35, 0.6)
 	u.atk_timer = rng.randf_range(0.1, 0.5) * u.interval
 	u.order = order
 	u.lane = [2.0, -3.0, 5.0, -1.0][order % 4]
@@ -233,7 +251,9 @@ func _add_runner(r: Dictionary, order: int) -> Unit:
 	return u
 
 
-func _add_enemy(kind: String, x: float, enc: int) -> Unit:
+func _add_enemy(spec: String, x: float, w: int) -> Unit:
+	var parts := spec.split(":")
+	var kind := parts[0]
 	var e := UnitDB.enemy_stats(kind, threat)
 	var u := Unit.new()
 	u.id = _next_id
@@ -243,13 +263,19 @@ func _add_enemy(kind: String, x: float, enc: int) -> Unit:
 	u.name = e.name
 	u.seed = rng.randi() % 1000
 	u.boss = e.get("boss", false)
-	var hp_mul := ENEMY_HP_MUL * (BOSS_HP_MUL if u.boss else 1.0) / (1.0 + THREAT_HP_DAMPEN * (threat - 1))
-	hp_mul *= 1.0 - clampf(float(fixer.get("enemy_hp_pct", 0.0)), 0.0, 0.5)  # Recon Drones
-	var dmg_mul := ENEMY_DMG_MUL * (BOSS_DMG_MUL if u.boss else 1.0)
+	u.machine = e.get("machine", false)
+	u.static_unit = e.get("static", false)
+	u.rusher = e.get("rusher", false)
+	u.backline = e.get("backline", false)
+	u.front_shield = float(e.get("front_shield", 0.0))
+	var hp_mul := 1.0 - clampf(float(fixer.get("enemy_hp_pct", 0.0)), 0.0, 0.5)
+	u.affix = parts[1] if parts.size() > 1 else ""
+	if u.affix == "chromed":
+		hp_mul *= 1.4
 	u.max_hp = round(e.hp * hp_mul)
 	u.hp = u.max_hp
 	u.armor = e.armor
-	u.dmg = e.dmg * dmg_mul
+	u.dmg = e.dmg
 	u.interval = e.interval
 	u.range = e.range
 	u.melee = e.melee
@@ -257,76 +283,121 @@ func _add_enemy(kind: String, x: float, enc: int) -> Unit:
 	u.flying = e.get("flying", false)
 	u.bounty = int(e.bounty)
 	u.x = x
-	u.encounter = enc
+	u.wave = w
 	u.lane = rng.randf_range(-3.0, 6.0)
 	u.body = 22.0 if u.boss else 0.0
 	if u.melee:
-		# Spread melee attackers out a little so they don't stack on one pixel.
-		u.range += rng.randf_range(0.0, 16.0)
+		u.range += rng.randf_range(0.0, 14.0)
 	else:
-		u.stop_jitter = rng.randf_range(-30.0, 0.0)
+		u.stop_jitter = rng.randf_range(-24.0, 0.0)
 	u.atk_timer = rng.randf_range(0.2, 0.8) * u.interval
 	if e.has("cast"):
 		u.cast_def = e.duplicate()
-		if e.has("cast_damage"):
-			u.cast_def.cast_damage = e.cast_damage * dmg_mul
-		if e.has("cast_dot"):
-			u.cast_def.cast_dot = e.cast_dot * ENEMY_DMG_MUL
-		u.cast_cd_timer = (BOSS_FIRST_CAST if u.boss else NETRUNNER_FIRST_CAST + rng.randf_range(0.0, 2.0))
+		u.cast_cd_timer = float(e.get("first_cast", 3.0)) + rng.randf_range(0.0, 1.5)
+	if u.affix == "shielded":
+		u.shield = 60.0 * (1.0 + 0.15 * (threat - 1))
+		u.shield_t = 999.0
+	elif u.affix == "overclocked":
+		u.interval *= 0.7
+		if not u.cast_def.is_empty():
+			u.cast_def.cast_time = float(u.cast_def.cast_time) * 0.7
+			u.cast_def.cast_cd = float(u.cast_def.cast_cd) * 0.7
 	units.append(u)
 	_by_id[u.id] = u
+	_emit({"type": "spawn", "unit": u.id})
 	return u
 
 
-# --- queries -------------------------------------------------------------
+## Techie's Deploy: a chrome ally the deck can target.
+func _add_turret(owner: Unit) -> Unit:
+	var t := UnitDB.TURRET
+	var mul := 1.6 if owner.stats.get("perk", "") == "twin_turret" else 1.0
+	var u := Unit.new()
+	u.id = _next_id
+	_next_id += 1
+	u.team = MERC
+	u.kind = "turret_ally"
+	u.name = "Turret"
+	u.machine = true
+	u.static_unit = true
+	u.max_hp = t.hp * mul
+	u.hp = u.max_hp
+	u.armor = t.armor
+	u.dmg = t.dmg * mul * (1.0 + float(fixer.get("dmg_pct", 0.0)))
+	u.interval = t.interval
+	u.range = t.range
+	u.melee = false
+	u.speed = 0.0
+	u.life_t = t.life
+	u.owner = owner.id
+	u.order = 99
+	u.row = 1
+	u.x = front_x() - 12.0
+	u.lane = 7.0
+	units.append(u)
+	_by_id[u.id] = u
+	_emit({"type": "spawn", "unit": u.id})
+	return u
+
+
+# --- queries -------------------------------------------------------------------
 
 func get_unit(id: int) -> Unit:
 	return _by_id.get(id, null)
 
 
-func runners(alive_only := true) -> Array:
-	return units.filter(func(u): return u.team == RUNNER and (u.alive or not alive_only))
+## Living crew mercs (no summons).
+func mercs(alive_only := true) -> Array:
+	return units.filter(func(u): return u.team == MERC and u.merc_id != "" and (u.alive or not alive_only))
 
 
-func enemies(alive_only := true) -> Array:
-	return units.filter(func(u): return u.team == ENEMY and (u.alive or not alive_only))
+## Everyone fighting for the crew right now (mercs, turrets, hijacked machines).
+func allies() -> Array:
+	return units.filter(func(u): return u.alive and u.side() == MERC)
+
+
+## Living hostile enemies (hijacked machines excluded).
+func enemies() -> Array:
+	return units.filter(func(u): return u.alive and u.side() == ENEMY)
 
 
 func front_x() -> float:
 	var best := -INF
 	for u in units:
-		if u.team == RUNNER and u.alive:
+		if u.team == MERC and u.merc_id != "" and u.alive:
 			best = maxf(best, u.x)
 	return best if best > -INF else anchor
 
 
 func in_combat() -> bool:
 	for u in units:
-		if u.team == ENEMY and u.alive:
+		if u.alive and u.side() == ENEMY:
 			return true
 	return false
 
 
-func can_extract() -> bool:
-	return outcome == "" and not in_combat()
+func total_waves() -> int:
+	return waves.size()
 
 
-func total_encounters() -> int:
-	return encounters.size()
-
-
-func downed_ids() -> Array:
+func crew_ports() -> Array:
 	var out := []
-	for u in units:
-		if u.team == RUNNER and not u.alive:
-			out.append(u.runner_id)
+	for u in mercs():
+		for p in u.ports():
+			if not p in out:
+				out.append(p)
 	return out
 
 
 func result() -> Dictionary:
+	var crew := []
+	for u in mercs(false):
+		crew.append({"id": u.merc_id, "hp_pct": u.hp_pct() if u.alive else 0.0, "down": not u.alive})
 	return {
 		"outcome": outcome if outcome != "" else "wiped", "bag": bag, "kills": kills,
-		"encounters_cleared": encounters_cleared, "downed": downed_ids(), "duration": time,
+		"fried": fried_kills, "killed_kinds": killed_kinds, "waves_cleared": maxi(0, next_wave - (1 if wave >= 0 else 0)),
+		"crew": crew, "duration": time, "trace": trace, "trace_gain": trace - trace_start,
+		"interrupts": interrupts,
 	}
 
 
@@ -340,183 +411,168 @@ func _emit(ev: Dictionary) -> void:
 	events.append(ev)
 
 
-# --- soft ----------------------------------------------------------------
+# --- deck hooks ------------------------------------------------------------------
 
-func slot_def(slot: int) -> Dictionary:
-	if slot < 0 or slot >= slots.size():
-		return {}
-	return slots[slot].def
-
-
-func needs_target(slot: int) -> bool:
-	return slot_def(slot).get("target", "none") != "none"
-
-
-## "" when castable now, otherwise "ram" / "cd" / "charges" / "over" / "target".
-func block_reason(slot: int) -> String:
-	if outcome != "" or slot < 0 or slot >= slots.size():
-		return "over"
-	var s: Dictionary = slots[slot]
-	var d: Dictionary = s.def
-	if int(d.get("charges", 0)) > 0 and s.charges <= 0:
-		return "charges"
-	if s.cd_t > 0.0:
-		return "cd"
-	if ram + 0.0001 < float(d.ram):
-		return "ram"
-	if not _has_any_target(slot):
-		return "target"
-	return ""
-
-
-func can_cast(slot: int) -> bool:
-	return block_reason(slot) == ""
-
-
-func _has_any_target(slot: int) -> bool:
-	var d := slot_def(slot)
-	match d.get("target", "none"):
-		"none":
-			# Untargeted enemy debuffs need enemies; firewall works any time.
-			return d.has("shield") or in_combat()
-		_:
-			for u in units:
-				if is_valid_target(slot, u.id):
-					return true
-	return false
-
-
-func is_valid_target(slot: int, id: int) -> bool:
-	var d := slot_def(slot)
-	var u := get_unit(id)
-	if u == null or not u.alive or d.is_empty():
-		return false
-	match d.get("target", "none"):
-		"enemy":
-			if u.team != ENEMY:
-				return false
-			if d.get("no_boss", false) and u.boss:
-				return false
-			return true
-		"ally":
-			return u.team == RUNNER
-	return false
-
-
-func cast(slot: int, target_id := -1) -> bool:
-	if not can_cast(slot):
-		return false
-	var s: Dictionary = slots[slot]
-	var d: Dictionary = s.def
-	var tgt: Unit = null
-	if d.target != "none":
-		if not is_valid_target(slot, target_id):
-			return false
-		tgt = get_unit(target_id)
-	ram -= float(d.ram)
-	s.cd_t = float(d.cd) * (1.0 - clampf(float(fixer.get("cd_pct", 0.0)), 0.0, 0.6))
-	if int(d.get("charges", 0)) > 0:
-		s.charges -= 1
-	casts_made += 1
-	_emit({"type": "cast", "slot": slot, "soft": s.id, "target": target_id, "color": d.color})
-	_apply_soft(s.id, d, tgt)
-	return true
-
-
-func _hack_mul() -> float:
-	return 1.0 + float(fixer.get("hack_pct", 0.0))
-
-
-func _apply_soft(id: String, d: Dictionary, t: Unit) -> void:
-	var col: Color = d.color
-	match id:
-		"short_circuit":
-			_deal(t, d.damage * _hack_mul(), null, true, "hack", false, col)
-			_stun(t, d.stun)
-		"nano_patch":
-			_heal(t, d.heal, false)
-			t.hots.append({"hps": d.hot, "t": d.duration})
-		"overclock":
-			t.haste = d.haste
-			t.haste_t = d.duration
-			_emit({"type": "status", "unit": t.id, "text": "OVERCLOCK", "color": col})
-		"weapon_glitch":
-			t.weaken = d.weaken
-			t.weaken_t = d.duration
-			_emit({"type": "status", "unit": t.id, "text": "GLITCHED", "color": col})
-		"contagion":
-			for e in enemies():
-				if e == t or absf(e.x - t.x) <= d.radius:
-					e.dots.append({"dps": d.dot * _hack_mul(), "t": d.duration, "color": col})
-					_emit({"type": "status", "unit": e.id, "text": "INFECTED", "color": col})
-		"firewall":
-			for r in runners():
-				r.shield = d.shield
-				r.shield_t = d.duration
-		"synapse_burnout":
-			var dmg: float = d.damage * _hack_mul()
-			if t.hp_pct() < d.execute_pct:
-				dmg *= 2.0
-			_deal(t, dmg, null, true, "hack", dmg > d.damage * _hack_mul(), col)
-		"optics_jam":
-			for e in enemies():
-				e.miss = d.miss
-				e.miss_t = d.duration
-				_emit({"type": "status", "unit": e.id, "text": "JAMMED", "color": col})
-		"smart_link":
-			t.crit_t = d.duration
-			_emit({"type": "status", "unit": t.id, "text": "SMART LINK", "color": col})
-		"cyberpsychosis":
-			t.psycho_t = d.duration
-			t.target = -1
-			_cancel_cast(t, false)
-			_emit({"type": "status", "unit": t.id, "text": "PSYCHO!", "color": col})
-		"system_collapse":
-			if t.boss:
-				_deal(t, d.boss_damage * _hack_mul(), null, true, "hack", true, col)
-			else:
-				_deal(t, t.hp + t.shield + 1.0, null, true, "hack", true, col)
-
-
-## A sensible target for autopilot / bots; -1 when none (or untargeted soft).
-func suggest_target(slot: int) -> int:
-	var d := slot_def(slot)
-	var best: Unit = null
-	match d.get("target", "none"):
-		"enemy":
-			# Interrupt casters first, then focus the weakest.
-			for e in enemies():
-				if not is_valid_target(slot, e.id):
-					continue
-				if e.is_casting() and d.has("stun"):
-					return e.id
-				if best == null or e.hp < best.hp:
+## Picks a target for a selector. ctx: {merc, enemy, x}. -1 when nothing fits.
+func select(pick: String, ctx: Dictionary) -> int:
+	var foes := enemies()
+	var fx := front_x()
+	match pick:
+		"front":
+			var best: Unit = null
+			for e in foes:
+				if best == null or e.x < best.x:
 					best = e
-		"ally":
-			for r in runners():
-				if d.has("heal"):
-					if best == null or r.hp_pct() < best.hp_pct():
-						best = r
-				else:
-					if best == null or r.dmg / r.interval > best.dmg / best.interval:
-						best = r
-	return best.id if best else -1
+			return best.id if best else -1
+		"weakest":
+			var best: Unit = null
+			for e in foes:
+				if best == null or e.hp_pct() < best.hp_pct():
+					best = e
+			return best.id if best else -1
+		"telegraph":
+			var best: Unit = null
+			for e in foes:
+				if e.is_casting() and (best == null or e.cast_t < best.cast_t):
+					best = e
+			return best.id if best else -1
+		"back":
+			var best: Unit = null
+			for e in foes:
+				if best == null or absf(e.x - fx) > absf(best.x - fx):
+					best = e
+			return best.id if best else -1
+		"machine":
+			var best: Unit = null
+			for e in foes:
+				if e.machine and not e.boss and (best == null or e.x < best.x):
+					best = e
+			return best.id if best else -1
+		"self":
+			var m := get_unit(int(ctx.get("merc", -1)))
+			return m.id if m != null and m.alive else -1
+		"ally_low":
+			var best: Unit = null
+			for a in allies():
+				if a.psycho_t > 0.0:
+					continue
+				if best == null or a.hp_pct() < best.hp_pct():
+					best = a
+			return best.id if best else -1
+	return -1
 
 
-# --- simulation ------------------------------------------------------------
+## Valid target for a payload of `team` ("enemy" | "ally").
+func is_payload_target(team: String, id: int, machine_only := false) -> bool:
+	var u := get_unit(id)
+	if u == null or not u.alive:
+		return false
+	if team == "enemy":
+		return u.side() == ENEMY and (not machine_only or (u.machine and not u.boss))
+	return u.side() == MERC and u.psycho_t <= 0.0
+
+
+## Nearest other units of the same side around `u` (for Fork / Chain).
+func neighbours(u: Unit, exclude: Array, max_dist: float, n: int) -> Array:
+	var pool := units.filter(func(o): return o.alive and o.side() == u.side() and not o.id in exclude and absf(o.x - u.x) <= max_dist)
+	pool.sort_custom(func(a, b): return absf(a.x - u.x) < absf(b.x - u.x))
+	return pool.slice(0, n)
+
+
+func add_trace(amount: float, reason: String) -> void:
+	if amount <= 0.0 or outcome != "":
+		return
+	amount *= 1.0 - clampf(float(fixer.get("trace_pct", 0.0)), 0.0, 0.8)
+	trace += amount
+	_emit({"type": "trace", "amount": amount, "reason": reason})
+	if trace >= TRACE_LIMIT:
+		_finish("traced")
+
+
+# --- payload effects (called by DeckEngine) --------------------------------------------
+
+func hack_damage(t: Unit, amount: float, col: Color) -> void:
+	if t.mark_t > 0.0:
+		amount *= 1.0 + MARK_VULN
+	_deal(t, amount, null, true, "hack", false, col)
+
+
+func apply_stun(t: Unit, dur: float, thread := -1) -> void:
+	if not t.alive:
+		return
+	t.stun = maxf(t.stun, dur)
+	_emit({"type": "status", "unit": t.id, "text": "STUNNED", "color": UITheme.CYAN})
+	if t.is_casting():
+		_cancel_cast(t, true, thread)
+
+
+func interrupt(t: Unit, thread := -1) -> void:
+	if t.is_casting():
+		_cancel_cast(t, true, thread)
+
+
+func knockback(t: Unit, dist: float) -> void:
+	if t.static_unit or t.boss:
+		return
+	t.x += dist if t.side() == ENEMY else -dist
+
+
+func add_dot(t: Unit, dps: float, dur: float, col: Color, key := "") -> void:
+	if key != "":
+		for d in t.dots:
+			if d.get("key", "") == key:
+				d.dps = maxf(d.dps, dps)
+				d.t = maxf(d.t, dur)
+				return
+	t.dots.append({"dps": dps, "t": dur, "color": col, "key": key})
+
+
+func apply_breach(t: Unit, vuln: float, dur: float) -> void:
+	t.breach_t = maxf(t.breach_t, dur)
+	t.vuln = maxf(t.vuln, vuln)
+	if t.shield > 0.0 and t.team == ENEMY:
+		t.shield = 0.0
+	_emit({"type": "status", "unit": t.id, "text": "BREACHED", "color": Color("ffe066")})
+
+
+func apply_infect(t: Unit, dur: float, blast: float, radius: float) -> void:
+	t.infect_t = maxf(t.infect_t, dur)
+	t.infect_blast = maxf(t.infect_blast, blast)
+	t.infect_radius = radius
+	_emit({"type": "status", "unit": t.id, "text": "INFECTED", "color": Color("9bff3d")})
+
+
+func apply_hijack(t: Unit, dur: float) -> void:
+	t.hijack_t = maxf(t.hijack_t, dur)
+	t.target = -1
+	_cancel_cast(t, false)
+	_emit({"type": "status", "unit": t.id, "text": "HIJACKED", "color": Color("ff6ad5")})
+
+
+func heal(t: Unit, amount: float, quiet := false) -> void:
+	_heal(t, amount, quiet)
+
+
+func apply_shield(t: Unit, amount: float, dur: float, firewall_block: bool) -> void:
+	t.shield = maxf(t.shield, amount)
+	t.shield_t = maxf(t.shield_t, dur)
+	if firewall_block:
+		t.firewall = true
+
+
+func apply_haste(t: Unit, amount: float, dur: float) -> void:
+	t.haste = maxf(t.haste if t.haste_t > 0.0 else 0.0, amount)
+	t.haste_t = maxf(t.haste_t, dur)
+	_emit({"type": "status", "unit": t.id, "text": "OVERDRIVE", "color": UITheme.YELLOW})
+
+
+# --- simulation --------------------------------------------------------------------------
 
 func step(dt: float) -> void:
 	while dt > 0.0 and outcome == "":
 		var h := minf(dt, MAX_STEP)
 		_tick(h)
 		dt -= h
-
-
-func extract() -> bool:
-	if not can_extract():
-		return false
-	_finish("extracted")
-	return true
 
 
 func _finish(o: String) -> void:
@@ -528,19 +584,15 @@ func _finish(o: String) -> void:
 
 func _tick(h: float) -> void:
 	time += h
-	ram = minf(max_ram, ram + ram_regen * h)
-	for s in slots:
-		s.cd_t = maxf(0.0, s.cd_t - h)
 	for u in units:
 		if u.alive:
 			_tick_status(u, h)
-	_check_spawn()
+	_check_waves(h)
 	_move(h)
 	for u in units:
 		if u.alive:
 			_think(u, h)
-	_tick_ice(h)
-	_tick_autopilot()
+	deck.tick(h)
 	_check_progress()
 
 
@@ -548,11 +600,29 @@ func _tick_status(u: Unit, h: float) -> void:
 	u.stun = maxf(0.0, u.stun - h)
 	u.taunt_t = maxf(0.0, u.taunt_t - h)
 	u.haste_t = maxf(0.0, u.haste_t - h)
-	u.weaken_t = maxf(0.0, u.weaken_t - h)
-	u.miss_t = maxf(0.0, u.miss_t - h)
-	u.crit_t = maxf(0.0, u.crit_t - h)
-	u.psycho_t = maxf(0.0, u.psycho_t - h)
+	u.dr_t = maxf(0.0, u.dr_t - h)
+	u.mark_t = maxf(0.0, u.mark_t - h)
+	u.infect_t = maxf(0.0, u.infect_t - h)
 	u.target_lock = maxf(0.0, u.target_lock - h)
+	u.dodge_timer = maxf(0.0, u.dodge_timer - h)
+	if u.psycho_t > 0.0:
+		u.psycho_t -= h
+		if u.psycho_t <= 0.0:
+			u.target = -1
+	if u.breach_t > 0.0:
+		u.breach_t -= h
+		if u.breach_t <= 0.0:
+			u.vuln = 0.0
+	if u.hijack_t > 0.0:
+		u.hijack_t -= h
+		if u.hijack_t <= 0.0:
+			u.target = -1
+			_emit({"type": "status", "unit": u.id, "text": "LINK LOST", "color": UITheme.TEXT_DIM})
+	if u.life_t > 0.0:
+		u.life_t -= h
+		if u.life_t <= 0.0:
+			_die(u, null)
+			return
 	if u.shield_t > 0.0:
 		u.shield_t -= h
 		if u.shield_t <= 0.0:
@@ -565,8 +635,7 @@ func _tick_status(u: Unit, h: float) -> void:
 			var total := 0.0
 			var col := Color.WHITE
 			for d in u.dots:
-				var span := minf(DOT_TICK, d.t)
-				total += d.dps * span
+				total += d.dps * minf(DOT_TICK, d.t)
 				d.t -= DOT_TICK
 				col = d.color
 			u.dots = u.dots.filter(func(d): return d.t > 0.0)
@@ -576,10 +645,10 @@ func _tick_status(u: Unit, h: float) -> void:
 					return
 	else:
 		u.dot_tick = DOT_TICK
-	# HoTs + passive regen tick every HEAL_TICK.
-	var regen := float(fixer.get("regen", 0.0)) if u.team == RUNNER else 0.0
-	if u.team == RUNNER and active_encounter < 0:
-		regen += u.max_hp * PATCH_UP_PCT * (1.0 + float(fixer.get("patch_pct", 0.0)))
+	# HoTs + regen tick every HEAL_TICK.
+	var regen := float(u.stats.get("regen", 0.0))
+	if u.team == MERC and wave < 0 and outcome == "":
+		regen += u.max_hp * 0.02
 	if not u.hots.is_empty() or regen > 0.0:
 		u.heal_tick -= h
 		if u.heal_tick <= 0.0:
@@ -593,62 +662,64 @@ func _tick_status(u: Unit, h: float) -> void:
 			u.hots = u.hots.filter(func(o): return o.t > 0.0)
 			if amount > 0.0 and u.hp < u.max_hp:
 				_heal(u, amount, not from_hot)
-	# Telegraphed cast progress.
 	if u.is_casting():
 		u.cast_t -= h
 		if u.cast_t <= 0.0:
 			_fire_cast(u)
 
 
-func _check_spawn() -> void:
-	if active_encounter >= 0 or next_encounter >= encounters.size() or outcome != "":
+func _check_waves(h: float) -> void:
+	if wave >= 0 or next_wave >= waves.size() or outcome != "":
 		return
-	if anchor < next_spawn_x:
+	wave_timer -= h
+	if wave_timer > 0.0:
 		return
-	var idx := next_encounter
-	next_encounter += 1
-	active_encounter = idx
-	var group: Array = encounters[idx]
+	wave = next_wave
+	next_wave += 1
+	var group: Array = waves[wave]
 	var base := front_x() + spawn_ahead
 	var boss := false
-	var i := 0
-	# Boss walks in last, guards first.
 	var ordered := group.duplicate()
-	ordered.sort_custom(func(a, b): return int(a == "cyberpsycho") < int(b == "cyberpsycho"))
-	for kind in ordered:
-		var e := _add_enemy(kind, base + i * 20.0 + rng.randf_range(0.0, 10.0), idx)
+	ordered.sort_custom(func(a, b): return int(String(a).begins_with("cyberpsycho")) < int(String(b).begins_with("cyberpsycho")))
+	var i := 0
+	for spec in ordered:
+		var kind := String(spec).split(":")[0]
+		var x := base + i * 18.0 + rng.randf_range(0.0, 10.0)
+		if UnitDB.ENEMIES[kind].get("static", false):
+			x = front_x() + 190.0 + rng.randf_range(-8.0, 8.0)
+		var e := _add_enemy(String(spec), x, wave)
 		boss = boss or e.boss
 		i += 1
-	_emit({"type": "encounter_start", "index": idx, "boss": boss})
+	for m in mercs():
+		var ws := float(m.stats.get("wave_shield", 0.0))
+		if ws > 0.0:
+			apply_shield(m, ws, 12.0, false)
+	_emit({"type": "wave_start", "index": wave, "total": waves.size(), "boss": boss})
+	deck.on_event("on_wave", {})
 
 
 func _check_progress() -> void:
 	if outcome != "":
 		return
-	if runners().is_empty():
+	if mercs().is_empty():
 		_finish("wiped")
 		return
-	if active_encounter >= 0:
+	if wave >= 0 and not in_combat():
+		# Hijacked machines burn out when their side has nobody left.
 		for u in units:
-			if u.team == ENEMY and u.alive and u.encounter == active_encounter:
-				return
-		var was_boss := active_encounter == encounters.size() - 1
-		_emit({"type": "encounter_cleared", "index": active_encounter, "boss": was_boss})
-		encounters_cleared += 1
-		active_encounter = -1
-		# Regroup: anchor jumps to the front so the squad re-forms while walking on.
-		var top := -INF
-		for r in runners():
-			top = maxf(top, r.x + _formation_offset(r))
-		anchor = maxf(anchor, top)
-		next_spawn_x = anchor + ENCOUNTER_GAP
-		if was_boss:
-			_finish("success")
+			if u.alive and u.team == ENEMY:
+				_die(u, null)
+		_emit({"type": "wave_cleared", "index": wave})
+		wave = -1
+		wave_timer = WAVE_DELAY
+		walk_target = anchor + WAVE_WALK
+		if next_wave >= waves.size():
+			_finish("won")
 
 
 func _formation_offset(r: Unit) -> float:
 	var idx := 0
-	for o in runners():
+	for o in mercs():
 		if o.order < r.order:
 			idx += 1
 	return idx * FORMATION_GAP
@@ -657,45 +728,52 @@ func _formation_offset(r: Unit) -> float:
 func _move(h: float) -> void:
 	var foes := enemies()
 	var fx := front_x()
-	var nearest_foe := INF
+	var nearest := INF
 	for e in foes:
-		nearest_foe = minf(nearest_foe, e.x - fx)
-	var advancing := foes.is_empty() or nearest_foe > ENGAGE_DIST
-	if advancing:
-		anchor += WALK_SPEED * h
-	for r in runners():
+		nearest = minf(nearest, e.x - fx)
+	var advancing := foes.is_empty() or nearest > ENGAGE_DIST
+	if advancing and anchor < walk_target:
+		anchor = minf(walk_target, anchor + WALK_SPEED * h)
+	for r in units:
+		if not r.alive or r.side() != MERC or r.team != MERC or r.static_unit:
+			continue
 		r.moving = false
 		if r.stun > 0.0:
 			continue
 		var want := anchor - _formation_offset(r)
-		if not advancing:
+		if not advancing or r.psycho_t > 0.0:
 			var t := get_unit(r.target)
-			if t != null and t.alive:
-				var dist: float = t.x - r.x - t.body - r.body
+			if t != null and t.alive and r.melee:
+				var dist: float = absf(t.x - r.x) - t.body - r.body
 				if dist > r.range:
-					want = t.x - t.body - r.body - r.range + 2.0
+					want = t.x - signf(t.x - r.x) * (t.body + r.body + r.range - 2.0)
 				else:
 					want = r.x
 			else:
-				want = r.x
+				want = r.x if not advancing else want
 		var dx: float = want - r.x
 		if absf(dx) > 0.5:
 			var sp := WALK_SPEED * (1.6 if advancing else 1.0)
 			r.x += clampf(dx, -sp * h, sp * h)
 			r.moving = true
-	for e in foes:
+	for e in units:
+		if not e.alive or e.team != ENEMY:
+			continue
 		e.moving = false
-		if e.stun > 0.0 or e.is_casting():
+		if e.stun > 0.0 or e.is_casting() or e.static_unit:
 			continue
 		var t := get_unit(e.target)
 		if t == null or not t.alive:
-			# Walk in until someone is acquired.
-			e.x -= e.speed * h
-			e.moving = true
+			if e.side() == ENEMY:
+				e.x -= e.speed * h
+				e.moving = true
 			continue
 		var stop: float = e.range - 2.0 + e.stop_jitter
 		var dist: float = e.x - t.x
-		if absf(dist) - t.body - e.body > stop:
+		var close_enough: bool = absf(dist) - t.body - e.body <= stop
+		if e.backline and e.side() == ENEMY and e.x - fx <= BACKLINE_STAND:
+			close_enough = true
+		if not close_enough:
 			e.x -= signf(dist) * e.speed * h
 			e.moving = true
 
@@ -707,30 +785,18 @@ func _think(u: Unit, h: float) -> void:
 	var t := get_unit(u.target)
 	var in_range := t != null and t.alive and absf(t.x - u.x) - t.body - u.body <= u.range + 4.0
 	u.engaged = in_range
-	# Enemy telegraphed cast.
-	if u.team == ENEMY and not u.cast_def.is_empty() and u.psycho_t <= 0.0:
-		if in_range:
-			u.cast_cd_timer -= h
-		if u.cast_cd_timer <= 0.0 and in_range:
+	if u.team == ENEMY and u.side() == ENEMY and not u.cast_def.is_empty() and u.psycho_t <= 0.0:
+		u.cast_cd_timer -= h
+		if u.cast_cd_timer <= 0.0 and (in_range or u.backline):
 			_start_cast(u)
 			return
-	# Boss enrage.
 	if u.boss and not u.enraged and u.hp_pct() < float(u.cast_def.get("enrage_pct", 0.5)):
 		u.enraged = true
 		_emit({"type": "enrage", "unit": u.id})
-	# Runner innate skill.
-	if u.team == RUNNER:
+	if u.team == MERC and u.merc_id != "" and u.psycho_t <= 0.0:
 		u.skill_timer -= h
 		if u.skill_timer <= 0.0 and _try_skill(u, t, in_range):
 			u.skill_timer = u.skill_cd
-		if u.burst_left > 0:
-			u.burst_timer -= h
-			if u.burst_timer <= 0.0:
-				u.burst_timer = BURST_GAP
-				u.burst_left -= 1
-				if in_range:
-					_attack(u, t)
-	# Auto attack.
 	if in_range:
 		u.atk_timer -= h
 		if u.atk_timer <= 0.0:
@@ -740,53 +806,64 @@ func _think(u: Unit, h: float) -> void:
 		u.atk_timer = maxf(u.atk_timer - h, 0.0)
 
 
+func _nearest(u: Unit, pool: Array) -> Unit:
+	var best: Unit = null
+	for o in pool:
+		if o == u:
+			continue
+		if best == null or absf(o.x - u.x) < absf(best.x - u.x):
+			best = o
+	return best
+
+
 func _pick_target(u: Unit) -> void:
-	if u.team == RUNNER:
-		var best: Unit = null
-		var best_d := INF
-		for e in units:
-			if e.team != ENEMY or not e.alive:
-				continue
-			var d := absf(e.x - u.x) + (400.0 if e.psycho_t > 0.0 else 0.0)
-			if d < best_d:
-				best_d = d
-				best = e
-		u.target = best.id if best else -1
-		return
-	# Enemy under Cyberpsychosis attacks its friends.
+	# Cyberpsycho mercs attack the nearest unit on either side.
 	if u.psycho_t > 0.0:
-		var best: Unit = null
-		for e in units:
-			if e.team == ENEMY and e.alive and e != u and e.psycho_t <= 0.0:
-				if best == null or absf(e.x - u.x) < absf(best.x - u.x):
+		var all := units.filter(func(o): return o.alive and o != u)
+		var n := _nearest(u, all)
+		u.target = n.id if n else -1
+		return
+	if u.side() == MERC:
+		var foes := enemies()
+		var best := _nearest(u, foes)
+		# Snipers prefer backline threats and casters.
+		if u.kind == "sniper":
+			for e in foes:
+				if e.is_casting() or e.backline:
 					best = e
+					break
 		u.target = best.id if best else -1
 		return
 	var cur := get_unit(u.target)
-	var cur_ok := cur != null and cur.alive and (cur.team == RUNNER or cur.psycho_t > 0.0)
-	# Taunt overrides everything.
+	var cur_ok := cur != null and cur.alive and cur.side() == MERC
 	if u.taunt_t > 0.0:
 		var tb := get_unit(u.taunt_by)
 		if tb != null and tb.alive:
 			u.target = tb.id
 			return
-	# Hit back at a psycho'd ally if it is the closest threat.
-	for e in units:
-		if e.team == ENEMY and e.alive and e != u and e.psycho_t > 0.0 and absf(e.x - u.x) < 60.0:
-			u.target = e.id
+	# Hit back at a psycho merc if it is close.
+	for o in units:
+		if o.alive and o.psycho_t > 0.0 and o.team == MERC and absf(o.x - u.x) < 50.0:
+			u.target = o.id
 			return
-	var rs := runners()
+	var rs := allies()
 	if rs.is_empty():
 		u.target = -1
 		return
-	if u.melee:
+	if u.rusher:
+		var back: Unit = rs[0]
+		for r in rs:
+			if r.x < back.x:
+				back = r
+		u.target = back.id
+	elif u.melee:
 		var front: Unit = rs[0]
 		for r in rs:
 			if r.x > front.x:
 				front = r
 		u.target = front.id
 	else:
-		if cur_ok and cur.team == RUNNER and u.target_lock > 0.0:
+		if cur_ok and u.target_lock > 0.0:
 			return
 		u.target = rs[rng.randi() % rs.size()].id
 		u.target_lock = RANGED_LOCK
@@ -794,30 +871,69 @@ func _pick_target(u: Unit) -> void:
 
 func _attack(a: Unit, t: Unit) -> void:
 	var ranged := not a.melee
-	if a.miss_t > 0.0 and rng.randf() < a.miss:
+	if t.team == MERC and t.dodge_timer <= 0.0 and float(t.stats.get("dodge_cd", 0.0)) > 0.0 and t.alive:
+		t.dodge_timer = float(t.stats.dodge_cd)
 		_emit({"type": "attack", "src": a.id, "target": t.id, "ranged": ranged, "missed": true})
-		_emit({"type": "miss", "target": t.id})
+		_emit({"type": "dodge", "unit": t.id})
+		deck.on_event("on_dodge", {"merc": t.id, "enemy": a.id})
 		return
-	var crit_chance := a.crit + (BASE_CRIT if a.team == RUNNER else 0.0)
-	if a.crit_t > 0.0:
-		crit_chance = 1.0
-	var crit := rng.randf() < crit_chance
+	a.attacks += 1
+	var crit_chance := a.crit + (BASE_CRIT if a.team == MERC else 0.0)
 	var amount := a.dmg
-	if a.team == RUNNER:
-		amount *= 1.0 + float(fixer.get("dmg_pct", 0.0))
-	if a.weaken_t > 0.0:
-		amount *= 1.0 - a.weaken
+	var pierce_shield: bool = a.stats.get("pierce", false)
+	if a.mark_ready:
+		a.mark_ready = false
+		crit_chance = 1.0
+		amount *= 2.5 / CRIT_MULT
+		pierce_shield = true
+		t.mark_t = MARK_TIME
+		_emit({"type": "status", "unit": t.id, "text": "MARKED", "color": UITheme.YELLOW})
+	if a.psycho_t > 0.0:
+		amount *= 2.0
+	if a.team == MERC and a.hp_pct() < 0.5:
+		amount *= 1.0 + float(a.stats.get("low_dmg", 0.0))
+	var crit := rng.randf() < crit_chance
 	if crit:
 		amount *= CRIT_MULT
+	# Frontal shield: blocks gunfire coming from the front (crew side).
+	if ranged and t.front_shield > 0.0 and t.breach_t <= 0.0 and not pierce_shield and a.side() != t.side():
+		amount *= 1.0 - t.front_shield
+		_emit({"type": "status", "unit": t.id, "text": "BLOCKED", "color": UITheme.TEXT_DIM})
 	_emit({"type": "attack", "src": a.id, "target": t.id, "ranged": ranged, "missed": false})
 	_deal(t, amount, a, false, "ranged" if ranged else "melee", crit, Color.WHITE)
+	if a.team == MERC and a.merc_id != "":
+		var cleave := int(a.stats.get("cleave", 0))
+		if cleave > 0:
+			for o in neighbours(t, [t.id], 26.0, cleave):
+				_deal(o, amount * 0.6, a, false, "melee", false, Color.WHITE)
+		var bh := float(a.stats.get("burn_on_hit", 0.0))
+		if bh > 0.0 and t.alive:
+			add_dot(t, bh, 3.0, Color("ff9f1c"), "katana")
+		var ke := int(a.stats.get("knock_every", 0))
+		if ke > 0 and a.attacks % ke == 0 and t.alive:
+			knockback(t, 20.0)
+			_emit({"type": "status", "unit": t.id, "text": "KNOCKBACK", "color": UITheme.MAGENTA})
+			deck.on_event("on_knock", {"merc": a.id, "enemy": t.id})
+		var be := int(a.stats.get("blast_every", 0))
+		if be > 0 and a.attacks % be == 0:
+			var cx := t.x
+			_emit({"type": "skill", "unit": a.id, "skill": "blast", "x": cx, "radius": 40.0, "targets": [t.id]})
+			for e in enemies():
+				if absf(e.x - cx) <= 40.0:
+					_deal(e, 25.0 * (1.0 + float(fixer.get("dmg_pct", 0.0))), a, false, "skill", false, Color("ff9f1c"))
+			deck.on_event("on_blast", {"merc": a.id, "enemy": t.id})
 
 
 func _deal(t: Unit, amount: float, src: Unit, pierce: bool, kind: String, crit: bool, col: Color) -> void:
 	if t == null or not t.alive:
 		return
 	if not pierce:
-		amount *= 10.0 / (10.0 + t.armor)
+		var arm := 0.0 if t.breach_t > 0.0 else t.armor
+		amount *= 10.0 / (10.0 + arm)
+	amount *= 1.0 + t.vuln
+	if t.team == MERC:
+		var red := t.dr + (0.5 if t.dr_t > 0.0 else 0.0)
+		amount *= 1.0 - clampf(red, 0.0, 0.8)
 	var absorbed := 0.0
 	if t.shield > 0.0:
 		absorbed = minf(t.shield, amount)
@@ -826,8 +942,35 @@ func _deal(t: Unit, amount: float, src: Unit, pierce: bool, kind: String, crit: 
 	t.hp -= rest
 	_emit({"type": "damage", "target": t.id, "amount": amount, "absorbed": absorbed, "crit": crit,
 		"kind": kind, "src": src.id if src else -1, "color": col})
+	if t.team == MERC and t.merc_id != "" and src != null and kind != "dot":
+		_add_stress(t)
 	if t.hp <= 0.0:
-		_die(t)
+		t.killed_by = kind
+		_die(t, src)
+		return
+	if t.team == MERC and t.merc_id != "":
+		if not t.emergency_used and float(t.stats.get("emergency_heal", 0.0)) > 0.0 and t.hp_pct() < 0.35:
+			t.emergency_used = true
+			_heal(t, float(t.stats.emergency_heal), false)
+			_emit({"type": "status", "unit": t.id, "text": "BIOMONITOR", "color": UITheme.GREEN})
+		if kind != "dot" and src != null:
+			deck.on_event("on_hit", {"merc": t.id, "enemy": src.id})
+		deck.on_hp(t)
+
+
+func _add_stress(t: Unit) -> void:
+	if t.stats.get("loyal", false) or t.psycho_t > 0.0:
+		return
+	var over := float(t.stats.get("chrome_over", 0.0))
+	if over <= 0.0:
+		return
+	t.stress += over * STRESS_PER_CHROME * float(t.stats.get("stress_mul", 1.0))
+	if t.stress >= UnitDB.STRESS_MAX:
+		t.stress = 0.0
+		t.psycho_t = PSYCHO_TIME
+		t.target = -1
+		_emit({"type": "psycho", "unit": t.id})
+		_emit({"type": "status", "unit": t.id, "text": "CYBERPSYCHOSIS!", "color": UITheme.RED})
 
 
 func _heal(t: Unit, amount: float, quiet: bool) -> void:
@@ -837,28 +980,20 @@ func _heal(t: Unit, amount: float, quiet: bool) -> void:
 	t.hp += real
 	if real > 0.0:
 		_emit({"type": "heal", "target": t.id, "amount": real, "quiet": quiet})
+		if t.team == MERC:
+			deck.on_hp(t)
 
 
-func _stun(t: Unit, dur: float) -> void:
-	if not t.alive:
-		return
-	t.stun = maxf(t.stun, dur)
-	_emit({"type": "status", "unit": t.id, "text": "STUNNED", "color": UITheme.CYAN})
-	if t.is_casting():
-		_cancel_cast(t, true)
-
-
-func _die(t: Unit) -> void:
-	if t.team == RUNNER and revives_left > 0:
-		# Trauma Team (skill tree): the first runner to drop is pulled back once.
+func _die(t: Unit, src: Unit) -> void:
+	if t.team == MERC and t.merc_id != "" and revives_left > 0:
 		revives_left -= 1
-		revives_used += 1
 		t.hp = 0.0
 		t.dots = []
 		t.stun = 0.0
 		_heal(t, t.max_hp * REVIVE_PCT, false)
 		_emit({"type": "status", "unit": t.id, "text": "TRAUMA TEAM!", "color": UITheme.GREEN})
 		return
+	var was_hostile := t.side() == ENEMY
 	t.alive = false
 	t.hp = 0.0
 	t.death_time = time
@@ -866,140 +1001,208 @@ func _die(t: Unit) -> void:
 	t.dots = []
 	t.hots = []
 	t.shield = 0.0
-	_emit({"type": "death", "unit": t.id})
-	if t.team == ENEMY:
-		kills += 1
-		var loot := int(round(t.bounty * (1.0 + float(fixer.get("bounty_pct", 0.0)))))
-		bag += loot
-		ram = minf(max_ram, ram + float(fixer.get("ram_on_kill", 0.0)))
-		_emit({"type": "loot", "unit": t.id, "amount": loot})
+	_emit({"type": "death", "unit": t.id, "src": src.id if src else -1})
+	if t.team != ENEMY:
+		return
+	kills += 1
+	if t.killed_by == "dot":
+		fried_kills += 1
+	killed_kinds.append(t.kind)
+	var loot := int(round(t.bounty * (1.0 + float(fixer.get("bounty_pct", 0.0)))))
+	bag += loot
+	_emit({"type": "loot", "unit": t.id, "amount": loot})
+	if src != null and src.team == MERC:
+		deck.add_ram(float(src.stats.get("ram_on_kill", 0.0)))
+	deck.add_ram(float(fixer.get("ram_on_kill", 0.0)))
+	if t.infect_t > 0.0:
+		_burst_infection(t)
+	if was_hostile:
+		deck.on_event("on_kill", {"merc": src.id if src != null and src.team == MERC else -1, "x": t.x, "enemy": t.id})
 
 
-# --- runner skills ---------------------------------------------------------
+## Contagion: the corpse bursts and passes its burn / breach to enemies nearby.
+func _burst_infection(t: Unit) -> void:
+	var col := Color("9bff3d")
+	_emit({"type": "skill", "unit": t.id, "skill": "contagion", "x": t.x, "radius": t.infect_radius, "targets": []})
+	for e in enemies():
+		if absf(e.x - t.x) > t.infect_radius:
+			continue
+		_deal(e, t.infect_blast, null, true, "hack", false, col)
+		if not e.alive:
+			continue
+		add_dot(e, 6.0, 4.0, Color("ff9f1c"), "contagion")
+		if t.breach_t > 0.0:
+			apply_breach(e, t.vuln, 4.0)
+
+
+# --- merc signatures -------------------------------------------------------------------
+
+func _sig_mul(u: Unit) -> float:
+	var m := 1.0 + float(fixer.get("dmg_pct", 0.0))
+	var so := float(u.stats.get("show_off", 0.0))
+	if so > 0.0:
+		for e in enemies():
+			if e.is_casting():
+				return m * (1.0 + so)
+	return m
+
 
 func _try_skill(u: Unit, t: Unit, in_range: bool) -> bool:
+	var perk := String(u.stats.get("perk", ""))
 	match u.skill:
-		"gorilla_slam":
-			var hit := []
-			for e in enemies():
-				if absf(e.x - u.x) - e.body <= 48.0:
-					hit.append(e)
-			if hit.is_empty():
+		"sandevistan":
+			var foes := enemies()
+			if foes.is_empty() or t == null:
 				return false
-			_emit({"type": "skill", "unit": u.id, "skill": u.skill, "x": u.x, "radius": 48.0, "target": -1})
+			foes.sort_custom(func(a, b): return absf(a.x - u.x) < absf(b.x - u.x))
+			var n := 5 if perk == "blade_dance" else 3
+			var hit := foes.slice(0, n)
+			var ids := []
+			var far := u.x
 			for e in hit:
+				ids.append(e.id)
+				far = maxf(far, e.x)
+			_emit({"type": "skill", "unit": u.id, "skill": u.skill, "x": far, "radius": 0.0, "targets": ids})
+			for e in hit:
+				# The dash goes behind shields.
+				_deal(e, u.dmg * 2.0 * _sig_mul(u), u, false, "skill", false, UITheme.MAGENTA)
+			deck.on_event("on_sig", {"merc": u.id})
+			return true
+		"bulwark":
+			var near := enemies().filter(func(e): return absf(e.x - u.x) <= 90.0)
+			if near.is_empty():
+				return false
+			var dur := 7.0 if perk == "iron_wall" else 4.0
+			_emit({"type": "skill", "unit": u.id, "skill": u.skill, "x": u.x, "radius": 90.0, "targets": []})
+			for e in near:
 				e.taunt_by = u.id
-				e.taunt_t = 4.0
-				_deal(e, 30.0 * u.lvl_mul * (1.0 + float(fixer.get("dmg_pct", 0.0))), u, false, "skill", false, UITheme.MAGENTA)
+				e.taunt_t = dur
+			u.dr_t = dur
+			_emit({"type": "status", "unit": u.id, "text": "BULWARK", "color": Color("ff9f1c")})
+			deck.on_event("on_sig", {"merc": u.id})
 			return true
-		"burst_fire":
-			if not in_range:
+		"stim":
+			var hurt := allies().filter(func(a): return a.hp_pct() < 0.9 and a.psycho_t <= 0.0)
+			if hurt.is_empty():
 				return false
-			u.burst_left = 4
-			u.burst_timer = 0.0
-			_emit({"type": "skill", "unit": u.id, "skill": u.skill, "x": u.x, "radius": 0.0, "target": t.id})
+			hurt.sort_custom(func(a, b): return a.hp_pct() < b.hp_pct())
+			var amount := 40.0 * (1.6 if perk == "field_surgeon" else 1.0) * (1.0 + float(fixer.get("hack_pct", 0.0)) * 0.5)
+			var who := hurt.slice(0, 2 if perk == "triage" else 1)
+			var ids := []
+			for a in who:
+				ids.append(a.id)
+				_heal(a, amount, false)
+				apply_haste(a, 0.3, 3.0)
+			_emit({"type": "skill", "unit": u.id, "skill": u.skill, "x": who[0].x, "radius": 0.0, "targets": ids})
+			deck.on_event("on_sig", {"merc": u.id})
 			return true
-		"trauma_kit":
-			var low: Unit = null
-			for r in runners():
-				if r.hp_pct() < 0.85 and (low == null or r.hp_pct() < low.hp_pct()):
-					low = r
-			if low == null:
+		"deploy":
+			if not in_combat():
 				return false
-			_emit({"type": "skill", "unit": u.id, "skill": u.skill, "x": low.x, "radius": 0.0, "target": low.id})
-			_heal(low, 35.0 * u.lvl_mul, false)
+			for o in units:
+				if o.alive and o.kind == "turret_ally" and o.owner == u.id:
+					return false
+			var tur := _add_turret(u)
+			_emit({"type": "skill", "unit": u.id, "skill": u.skill, "x": tur.x, "radius": 0.0, "targets": [tur.id]})
+			deck.on_event("on_sig", {"merc": u.id})
 			return true
-		"shock_grenade":
-			if not in_range:
+		"mark":
+			if not in_range or u.mark_ready:
 				return false
-			var cx := t.x
-			_emit({"type": "skill", "unit": u.id, "skill": u.skill, "x": cx, "radius": 50.0, "target": t.id})
-			for e in enemies():
-				if absf(e.x - cx) <= 50.0:
-					_deal(e, 25.0 * u.lvl_mul * (1.0 + float(fixer.get("dmg_pct", 0.0))), u, false, "skill", false, UITheme.CYAN)
-					_stun(e, 1.0)
+			u.mark_ready = true
+			_emit({"type": "skill", "unit": u.id, "skill": u.skill, "x": t.x, "radius": 0.0, "targets": [t.id]})
+			deck.on_event("on_sig", {"merc": u.id})
 			return true
 	return false
 
 
-# --- enemy casts -----------------------------------------------------------
+# --- enemy telegraphs ----------------------------------------------------------------------
 
 func _start_cast(u: Unit) -> void:
-	var rs := runners()
+	var rs := allies()
 	if rs.is_empty():
 		return
 	var tgt: Unit = rs[rng.randi() % rs.size()]
-	if u.cast_def.cast == "berserk_charge":
-		tgt = rs[0]
-		for r in rs:
-			if r.x > tgt.x:
-				tgt = r
+	match u.cast_def.cast:
+		"berserk_charge":
+			for r in rs:
+				if r.x > tgt.x:
+					tgt = r
+		"upload":
+			# The most chromed non-analog merc: chrome is an interface, both ways.
+			var best: Unit = null
+			var best_c := -1.0
+			for r in mercs():
+				if r.stats.get("analog", false):
+					continue
+				var c := float(r.stats.get("chrome_load", 0.0)) + rng.randf() * 0.5
+				if c > best_c:
+					best_c = c
+					best = r
+			if best == null:
+				u.cast_cd_timer = float(u.cast_def.cast_cd)
+				return
+			tgt = best
+		"grenade":
+			# Aim where the crew is clustered.
+			var best_n := -1
+			for r in rs:
+				var n := 0
+				for o in rs:
+					if absf(o.x - r.x) <= float(u.cast_def.get("radius", 40.0)):
+						n += 1
+				if n > best_n:
+					best_n = n
+					tgt = r
 	u.cast_name = u.cast_def.cast
 	u.cast_total = float(u.cast_def.cast_time)
 	u.cast_t = u.cast_total
 	u.cast_target = tgt.id
 	_emit({"type": "telegraph", "unit": u.id, "name": u.cast_name, "duration": u.cast_total, "target": tgt.id})
+	deck.on_event("on_tele", {"enemy": u.id, "merc": tgt.id})
 
 
-func _cancel_cast(u: Unit, interrupted: bool) -> void:
+func _cancel_cast(u: Unit, interrupted: bool, thread := -1) -> void:
 	if not u.is_casting():
 		return
 	u.cast_name = ""
 	u.cast_cd_timer = float(u.cast_def.get("cast_cd", 8.0))
 	if interrupted:
 		interrupts += 1
-		_emit({"type": "interrupt", "unit": u.id})
+		_emit({"type": "interrupt", "unit": u.id, "thread": thread})
 
 
 func _fire_cast(u: Unit) -> void:
-	var name := u.cast_name
+	var nm := u.cast_name
 	u.cast_name = ""
 	u.cast_cd_timer = float(u.cast_def.get("cast_cd", 8.0))
 	var t := get_unit(u.cast_target)
 	if t == null or not t.alive:
-		var rs := runners()
+		var rs := allies()
 		if rs.is_empty():
 			return
 		t = rs[0]
-	_emit({"type": "cast_fire", "unit": u.id, "target": t.id, "name": name})
-	match name:
-		"overheat":
-			t.dots.append({"dps": float(u.cast_def.cast_dot), "t": float(u.cast_def.cast_duration), "color": UITheme.PURPLE})
-			_emit({"type": "status", "unit": t.id, "text": "OVERHEAT", "color": UITheme.PURPLE})
+	match nm:
+		"aim":
+			_emit({"type": "cast_fire", "unit": u.id, "target": t.id, "name": nm, "blocked": false})
+			_deal(t, float(u.cast_def.cast_damage), u, true, "snipe", true, UITheme.RED)
+		"grenade":
+			_emit({"type": "cast_fire", "unit": u.id, "target": t.id, "name": nm, "blocked": false})
+			var cx := t.x
+			for r in allies():
+				if absf(r.x - cx) <= float(u.cast_def.get("radius", 40.0)):
+					_deal(r, float(u.cast_def.cast_damage), u, false, "blast", false, Color("ff9f1c"))
+		"upload":
+			if t.firewall:
+				t.firewall = false
+				_emit({"type": "cast_fire", "unit": u.id, "target": t.id, "name": nm, "blocked": true})
+				_emit({"type": "status", "unit": t.id, "text": "FIREWALLED", "color": Color("3d8bff")})
+				return
+			_emit({"type": "cast_fire", "unit": u.id, "target": t.id, "name": nm, "blocked": false})
+			add_dot(t, float(u.cast_def.cast_dot), float(u.cast_def.cast_duration), UITheme.PURPLE)
+			_emit({"type": "status", "unit": t.id, "text": "QUICKHACKED", "color": UITheme.PURPLE})
+			add_trace(float(u.cast_def.get("cast_trace", 0.0)), "netrunner")
 		"berserk_charge":
+			_emit({"type": "cast_fire", "unit": u.id, "target": t.id, "name": nm, "blocked": false})
 			u.x = t.x + 18.0 + u.body
 			_deal(t, float(u.cast_def.cast_damage), u, true, "charge", true, UITheme.RED)
-
-
-# --- passives ----------------------------------------------------------------
-
-func _tick_ice(h: float) -> void:
-	if not fixer.get("ice_sentry", false):
-		return
-	ice_timer -= h
-	if ice_timer > 0.0:
-		return
-	var foes := enemies()
-	if foes.is_empty():
-		ice_timer = 0.0
-		return
-	var d := SoftDB.get_def("ice_sentry")
-	ice_timer = float(d.get("interval", 4.0))
-	var t: Unit = foes[rng.randi() % foes.size()]
-	_emit({"type": "ice", "target": t.id})
-	_deal(t, float(d.get("damage", 12.0)) * _hack_mul(), null, true, "hack", false, d.color)
-
-
-func _tick_autopilot() -> void:
-	var threshold := max_ram * (1.0 - clampf(float(fixer.get("autopilot_pct", 0.0)), 0.0, 0.5))
-	if not fixer.get("autopilot", false) or ram < threshold - 0.001 or not in_combat():
-		return
-	for i in slots.size():
-		if not can_cast(i):
-			continue
-		if needs_target(i):
-			var t := suggest_target(i)
-			if t >= 0 and cast(i, t):
-				return
-		elif cast(i, -1):
-			return

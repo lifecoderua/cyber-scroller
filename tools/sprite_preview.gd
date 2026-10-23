@@ -7,7 +7,8 @@ func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	if args.size() > 0:
 		out = args[0]
-	var kinds := ["solo", "gunner", "medtech", "techie", "ganger", "gunman", "heavy", "netrunner", "cyberpsycho", "drone"]
+	var kinds := ["solo", "borg", "medtech", "techie", "sniper", "ganger", "rusher", "gunman", "shield", "esniper",
+		"grenadier", "netrunner", "heavy", "turret", "turret_ally", "cyberpsycho", "drone"]
 	var scale := 4
 	var sheet := Image.create_empty(kinds.size() * 17 * scale, 3 * 25 * scale, false, Image.FORMAT_RGBA8)
 	sheet.fill(Color("1a1a2e"))

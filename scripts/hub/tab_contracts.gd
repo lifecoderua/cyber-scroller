@@ -1,186 +1,86 @@
 extends VBoxContainer
-## CONTRACTS tab: three job cards plus a squad / deck summary strip.
+## JOBS tab: the contract board. Each job is one run: crew draft, district map, target.
 
 var hub: Control
-var _cards: HBoxContainer
-var _strip: PanelContainer
+var _list: VBoxContainer
 
 
 func setup(h: Control) -> void:
 	hub = h
 	add_theme_constant_override("separation", 5)
-	_cards = HubW.hbox(6)
-	_cards.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	add_child(_cards)
-	_strip = HubW.panel(UITheme.CYAN.darkened(0.55), HubW.PANEL_BG, 1, 5)
-	add_child(_strip)
+	var head := HubW.hbox(6)
+	head.add_child(HubW.lbl("CONTRACTS", 13, UITheme.CYAN))
+	head.add_child(HubW.spacer())
+	head.add_child(HubW.lbl("pick a job, then a crew", 9, UITheme.TEXT_DIM))
+	add_child(head)
+	_list = HubW.vbox(8)
+	add_child(HubW.scroll(_list))
 
 
 func on_show() -> void:
-	HubFx.stagger(_cards, 0.06)
+	HubFx.stagger(_list, 0.06)
 
 
 func refresh() -> void:
-	HubW.clear(_cards)
+	HubW.clear(_list)
 	if Game.contracts.is_empty():
-		_cards.add_child(HubW.lbl("No jobs on the board. Check back later.", 12, UITheme.TEXT_DIM))
+		_list.add_child(HubW.lbl("No jobs on the board. Check back later.", 12, UITheme.TEXT_DIM))
 	for i in Game.contracts.size():
-		_cards.add_child(_contract_card(i, Game.contracts[i]))
-	_build_strip()
+		_list.add_child(_contract_card(i, Game.contracts[i]))
+	var stats := HubW.lbl("Runs %d  ·  won %d  ·  stash %d/%d" % [Game.runs_played, Game.runs_won, Game.stash.size(), Game.stash_cap()], 9, UITheme.TEXT_DIM)
+	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_list.add_child(stats)
 
 
 func _contract_card(i: int, c: Dictionary) -> Control:
 	var threat := int(c.threat)
 	var tc := HubW.threat_color(threat)
-	var p := HubW.panel(tc.darkened(0.35), HubW.PANEL_BG, 1, 7)
-	p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var v := HubW.vbox(3)
+	var p := HubW.panel(tc.darkened(0.35), HubW.PANEL_BG, 1, 8)
+	var v := HubW.vbox(4)
 	p.add_child(v)
-
 	var top := HubW.hbox(4)
 	top.add_child(HubW.lbl("JOB %02d" % (i + 1), 9, UITheme.TEXT_DIM))
 	top.add_child(HubW.spacer())
 	top.add_child(HubW.lbl(String(c.district).to_upper(), 9, UITheme.CYAN))
 	v.add_child(top)
-
-	var title := HubW.wrap(HubW.lbl(String(c.title), 12, UITheme.TEXT), 3)
-	title.custom_minimum_size.y = 30
-	v.add_child(title)
-
+	v.add_child(HubW.wrap(HubW.lbl(String(c.title), 13, UITheme.TEXT), 2))
 	var who := HubW.hbox(4)
 	who.add_child(HubW.lbl(String(c.client), 10, UITheme.TEXT))
 	who.add_child(HubW.lbl("vs", 9, UITheme.TEXT_DIM))
 	who.add_child(HubW.clip(HubW.lbl(String(c.target), 10, UITheme.MAGENTA)))
 	v.add_child(who)
-
 	var th := HubW.hbox(5)
 	th.add_child(HubW.lbl("THREAT", 9, UITheme.TEXT_DIM))
 	th.add_child(HubPips.new(threat, 5, tc))
 	th.add_child(HubW.lbl(HubW.THREAT_NAMES[threat - 1], 9, tc))
 	v.add_child(th)
-
-	var encs: Array = c.get("encounters", [])
-	var enc := HubW.hbox(4)
-	enc.add_child(HubW.lbl("%d fights +" % maxi(0, encs.size() - 1), 10, UITheme.TEXT))
-	enc.add_child(HubW.lbl("BOSS", 10, UITheme.RED))
-	v.add_child(enc)
-	v.add_child(HubW.spacer(true))
-	v.add_child(_intel_row(encs, Game.contracts.size() > 3))
+	var foes := UnitDB.enemy_pool(mini(5, threat + 1))
+	var lineup := HubW.hbox(-4)
+	for k in foes.slice(0, 6):
+		var tr := HubW.portrait(k, 3, 1)
+		tr.flip_h = true
+		lineup.add_child(tr)
+	var boss := HubW.portrait("cyberpsycho", 3, 2)
+	boss.flip_h = true
+	boss.modulate = Color(1.15, 0.8, 0.8)
+	lineup.add_child(boss)
+	lineup.tooltip_text = "Expected: " + ", ".join(foes.map(func(k): return String(UnitDB.ENEMIES[k].name)))
+	lineup.mouse_filter = Control.MOUSE_FILTER_PASS
 	var bottom := HubW.hbox(6)
-	var pay := HubW.vbox(0)
-	pay.add_child(HubW.lbl("PAYOUT", 8, UITheme.TEXT_DIM))
-	pay.add_child(HubW.lbl(UITheme.format_eddies(int(c.reward)), 15, UITheme.YELLOW))
-	bottom.add_child(pay)
+	bottom.add_child(lineup)
 	bottom.add_child(HubW.spacer())
-	var go := HubW.button("LAUNCH", func(): pass, 13, tc, true)
-	go.custom_minimum_size = Vector2(80, 32)
-	go.size_flags_vertical = Control.SIZE_SHRINK_END
-	go.pressed.connect(func(): hub.launch(i, go))
-	bottom.add_child(go)
-	if not Game.can_start_mission():
-		go.disabled = true
-		go.text = "NO SQUAD"
-		go.tooltip_text = "Assign runners to your squad in CREW first"
+	var pay := HubW.vbox(0)
+	var pl := HubW.lbl("WIN PAYS", 8, UITheme.TEXT_DIM)
+	pl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	pay.add_child(pl)
+	var sr := HubW.hbox(3)
+	sr.add_child(HubShard.new(10))
+	sr.add_child(HubW.lbl("~%d  +%d rep" % [int(c.get("shards", 0)), threat], 12, HubShard.COLOR.lightened(0.3)))
+	pay.add_child(sr)
+	bottom.add_child(pay)
 	v.add_child(bottom)
+	var go := HubW.button("TAKE THE JOB", func(): pass, 13, tc, true)
+	go.custom_minimum_size.y = 40
+	go.pressed.connect(func(): hub.launch(i, go))
+	v.add_child(go)
 	return p
-
-
-## Lineup of enemy sprites expected on the job, boss last.
-## `compact` (4 offers, Wider Network node): fewer portraits so the cards fit side by side.
-func _intel_row(encs: Array, compact := false) -> Control:
-	var seen := []
-	var total := 0
-	for g in encs:
-		total += g.size()
-		for k in g:
-			if k != "cyberpsycho" and not k in seen:
-				seen.append(k)
-	var all_kinds := seen.duplicate()
-	if compact and seen.size() > 2:
-		seen = seen.slice(0, 2)
-	seen.append("cyberpsycho")
-	var row := HubW.hbox(-8 if compact else -4)
-	row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	var names := []
-	for k in seen:
-		var tex_rect := HubW.portrait(k, 3, 2)
-		tex_rect.flip_h = true
-		if k == "cyberpsycho":
-			tex_rect.modulate = Color(1.15, 0.8, 0.8)
-		row.add_child(tex_rect)
-		names.append(UnitDB.ENEMIES[k].name)
-	row.add_child(HubW.spacer())
-	var cnt := HubW.vbox(0)
-	cnt.size_flags_vertical = Control.SIZE_SHRINK_END
-	var hidden := all_kinds.size() - (seen.size() - 1)
-	var l1 := HubW.lbl("INTEL" + (" +%d types" % hidden if hidden > 0 else ""), 8, UITheme.TEXT_DIM)
-	l1.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	cnt.add_child(l1)
-	var l2 := HubW.lbl(("~%d foes" if compact else "~%d hostiles") % total, 9, UITheme.TEXT)
-	l2.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	cnt.add_child(l2)
-	row.add_child(cnt)
-	for k in all_kinds:
-		if not UnitDB.ENEMIES[k].name in names:
-			names.append(UnitDB.ENEMIES[k].name)
-	row.tooltip_text = "Expected: " + ", ".join(names)
-	row.mouse_filter = Control.MOUSE_FILTER_PASS
-	return row
-
-
-func _build_strip() -> void:
-	HubW.clear(_strip)
-	var h := HubW.hbox(8)
-	_strip.add_child(h)
-	var sq := Game.squad_runners()
-	var sl := HubW.vbox(0)
-	sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	sl.add_child(HubW.lbl("SQUAD", 9, UITheme.CYAN))
-	sl.add_child(HubW.lbl("%d/%d" % [sq.size(), Game.squad_max()], 12, UITheme.TEXT))
-	h.add_child(sl)
-	if sq.is_empty():
-		var warn := HubW.lbl("No runners assigned!", 11, UITheme.RED)
-		warn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		h.add_child(warn)
-		var b := HubW.button("GO TO CREW", func(): hub.select_tab(1), 11, UITheme.RED)
-		b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		h.add_child(b)
-	for r in sq:
-		var unit := HubW.hbox(3)
-		unit.add_child(HubW.portrait(r.cls, int(r.seed), 2))
-		var info := HubW.vbox(0)
-		info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		info.add_child(HubW.lbl(HubW.short_name(r), 10, UITheme.TEXT))
-		var cls_name: String = UnitDB.CLASSES[r.cls].name if sq.size() <= 3 else ""
-		info.add_child(HubW.lbl(("%s L%d" % [cls_name, int(r.level)]).strip_edges(), 9, HubW.class_color(r.cls)))
-		info.add_child(HubW.lbl("HP %d" % int(Game.runner_stats(r).hp), 9, UITheme.TEXT_DIM))
-		unit.add_child(info)
-		h.add_child(unit)
-	h.add_child(HubW.spacer())
-
-	var sep := ColorRect.new()
-	sep.color = Color(UITheme.CYAN, 0.25)
-	sep.custom_minimum_size = Vector2(1, 0)
-	h.add_child(sep)
-
-	var deck := HubW.vbox(3)
-	deck.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var fs := Game.fixer_stats()
-	var dh := HubW.hbox(6)
-	dh.add_child(HubW.lbl("DECK", 9, UITheme.MAGENTA))
-	dh.add_child(HubW.lbl("RAM %d  +%.2f/s" % [int(fs.max_ram), float(fs.ram_regen)], 9, UITheme.CYAN))
-	deck.add_child(dh)
-	var chips := HFlowContainer.new()
-	chips.add_theme_constant_override("h_separation", 3)
-	chips.add_theme_constant_override("v_separation", 3)
-	chips.custom_minimum_size.x = 210 if sq.size() <= 3 else 150
-	for id in Game.deck_active + Game.deck_passive:
-		var d := SoftDB.get_def(id)
-		var col: Color = d.get("color", UITheme.CYAN)
-		var chip := HubW.panel(col.darkened(0.3), Color(col.darkened(0.8), 0.9), 1, 3)
-		chip.add_child(HubW.lbl(String(d.name), 9, col.lightened(0.2)))
-		chips.add_child(chip)
-	if Game.deck_active.is_empty() and Game.deck_passive.is_empty():
-		chips.add_child(HubW.lbl("Deck empty", 9, UITheme.RED))
-	deck.add_child(chips)
-	h.add_child(deck)

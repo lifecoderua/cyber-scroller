@@ -4,7 +4,7 @@ extends Node
 ##   Audio.play("hit")                    # name from SfxPresets, optional volume_db / pitch
 ##   Audio.set_music("mission")           # "hub" | "mission" | "boss" | "" (silence)
 ##   Audio.attach_mission(self)           # mission scene: pause whoosh, music filter, mute button
-##   Audio.on_sim_event(ev)               # mission scene: CombatSim event -> SFX
+##   Audio.on_sim_event(ev)               # mission scene: CombatSim / DeckEngine event -> SFX
 ##
 ## Everything is generated at startup in small jobs spread over frames (no threads, no
 ## assets). A sound requested before its turn is rendered on the spot.
@@ -201,7 +201,7 @@ func mute_row(font_size := 12) -> Control:
 
 ## Hub results modal: debrief stingers.
 func play_result(res: Dictionary) -> void:
-	if String(res.get("outcome", "")) == "wiped":
+	if String(res.get("outcome", "")) != "won":
 		play("runner_down")
 		return
 	for i in 3:
@@ -227,42 +227,44 @@ func on_sim_event(ev: Dictionary) -> void:
 			var a: CombatSim.Unit = sim.get_unit(ev.src) if sim else null
 			if a == null:
 				return
-			if a.team == CombatSim.RUNNER:
-				if a.melee:
+			if a.side() == CombatSim.MERC:
+				if a.melee and a.kind != "borg":
 					play("melee_slash")
-				elif a.kind == "gunner":
-					play("shot")
+				elif a.kind == "borg":
+					play("shot", 0.0, 0.75)
+				elif a.kind == "sniper":
+					play("shot", 1.0, 0.9)
 				else:
-					play("pistol", -1.0, 1.15 if a.kind == "techie" else 1.0)
+					play("pistol", -1.0, 1.15 if a.kind in ["techie", "turret_ally"] else 1.0)
 			else:
 				if a.boss:
 					play("melee_slash", 1.0, 0.6)
 				elif a.melee:
 					play("melee_slash", -3.0, 0.8)
-				elif a.flying:
+				elif a.flying or a.machine:
 					play("pistol", -5.0, 1.4)
 				else:
 					play("pistol", -3.0, 0.78)
 		"damage":
 			var kind := String(ev.get("kind", ""))
 			var t: CombatSim.Unit = sim.get_unit(ev.target) if sim else null
-			var on_runner := t != null and t.team == CombatSim.RUNNER
+			var on_merc := t != null and t.team == CombatSim.MERC
 			if float(ev.get("absorbed", 0.0)) > 0.0 and float(ev.absorbed) >= float(ev.amount) - 0.5:
 				play("zap", -8.0, 1.8)
-			elif kind == "charge":
+			elif kind in ["charge", "snipe"]:
 				play("slam", 2.0, 0.8)
 			elif kind == "dot":
 				play("hit", -8.0, 1.4)
 			elif ev.get("crit", false):
 				play("crit")
-			elif kind in ["melee", "ranged", "hack"]:
-				play("hit", 2.0 if kind == "hack" else 0.0, 0.85 if on_runner else 1.0)
+			elif kind in ["melee", "ranged", "hack", "blast"]:
+				play("hit", 2.0 if kind == "hack" else 0.0, 0.85 if on_merc else 1.0)
 		"heal":
 			if not ev.get("quiet", false):
 				play("heal")
 		"death":
 			var u: CombatSim.Unit = sim.get_unit(ev.unit) if sim else null
-			if u and u.team == CombatSim.RUNNER:
+			if u and u.team == CombatSim.MERC and u.merc_id != "":
 				play("runner_down")
 			else:
 				play("enemy_death")
@@ -271,61 +273,76 @@ func on_sim_event(ev: Dictionary) -> void:
 		"loot":
 			var n := clampi(floori(float(ev.get("amount", 1)) / 6.0) + 1, 1, 3)
 			for i in n:
-				play_later("coin", 0.25 + i * 0.09, 0.0, 1.0 + i * 0.1)
-		"cast":
-			var d: Dictionary = SoftDB.get_def(String(ev.get("soft", "")))
+				play_later("coin", 0.25 + i * 0.09, -3.0, 1.0 + i * 0.1)
+		"payload":
+			if ev.get("echo", false):
+				play("hack_cast", -6.0, 1.3)
+				return
 			var col: Color = ev.get("color", Color.WHITE)
-			# Each soft gets its own chirp pitch from its color family.
+			# Each payload gets its own chirp pitch from its colour.
 			var pitch := 0.8 + col.h * 0.6 if col.s > 0.1 else 0.7
-			play("hack_cast", 0.0, pitch)
-			if d.has("heal"):
-				play_later("heal", 0.05)
-			elif d.has("shield"):
-				play_later("shield", 0.05)
-			elif d.has("stun"):
-				play_later("zap", 0.05)
-			elif d.has("boss_damage") or float(d.get("damage", 0.0)) >= 60.0:
-				play_later("explosion", 0.08, -2.0, 1.2)
+			play("hack_cast", -2.0, pitch)
+			match String(ev.get("chip", "")):
+				"patch":
+					play_later("heal", 0.05)
+				"firewall":
+					play_later("shield", 0.05)
+				"shock", "sonic":
+					play_later("zap", 0.05)
+				"hijack", "contagion":
+					play_later("zap", 0.05, -2.0, 0.7)
 		"skill":
 			match String(ev.get("skill", "")):
-				"gorilla_slam":
+				"sandevistan":
+					play("melee_slash", 1.0, 1.3)
+					play_later("zap", 0.08, -4.0, 1.6)
+				"bulwark":
 					play("slam")
-				"trauma_kit":
+				"stim":
 					play("heal", -2.0, 0.9)
-				"shock_grenade":
-					play("explosion")
-					play_later("zap", 0.1, -2.0)
+				"deploy":
+					play("shield", -2.0, 0.7)
+				"mark":
+					play("telegraph", -6.0, 1.6)
+				"blast", "contagion":
+					play("explosion", -2.0, 1.1)
 		"telegraph":
 			var u: CombatSim.Unit = sim.get_unit(ev.unit) if sim else null
 			play("telegraph", 2.0 if u and u.boss else 0.0, 0.8 if u and u.boss else 1.0)
 		"interrupt":
 			play("interrupted")
 		"cast_fire":
-			if String(ev.get("name", "")) == "berserk_charge":
-				play("slam", 0.0, 0.9)
-			else:
-				play("zap", 0.0, 0.7)
-		"enrage":
+			match String(ev.get("name", "")):
+				"berserk_charge":
+					play("slam", 0.0, 0.9)
+				"aim":
+					play("shot", 3.0, 0.6)
+				"grenade":
+					play("explosion")
+				_:
+					play("zap", 0.0, 0.7 if not ev.get("blocked", false) else 1.6)
+		"enrage", "psycho":
 			play("enrage")
-		"ice":
-			play("zap", -4.0, 1.4)
-		"encounter_start":
+		"overheat":
+			play("enrage", -2.0, 1.4)
+			play_later("ui_error", 0.1)
+		"dodge":
+			play("zap", -6.0, 2.0)
+		"wave_start":
 			if ev.get("boss", false):
 				play("boss_warning")
 				set_music("boss")
 			else:
 				play("encounter_start")
-		"encounter_cleared":
+		"wave_cleared":
 			play("hire", -2.0, 1.12)
 		"outcome":
 			_duck_target = 0.45
 			match String(ev.get("outcome", "")):
-				"success":
+				"won":
 					play("mission_success")
-				"wiped":
+				_:
 					play("flatlined")
-				"extracted":
-					play("extract")
 
 
 func _poll_mission() -> void:
@@ -407,16 +424,17 @@ func _snapshot() -> Dictionary:
 	var g := get_node_or_null("/root/Game")
 	if g == null:
 		return {}
-	return {"eddies": g.eddies, "roster": g.roster.size(), "runs": g.missions_run}
+	var run_eddies: int = g.run.eddies if g.run != null else 0
+	return {"shards": g.shards, "eddies": run_eddies, "crew": g.run.crew.size() if g.run != null else 0, "runs": g.runs_played}
 
 
 ## Purchases and hires are detected from Game state diffs (no hooks in every tab).
 func _on_game_changed() -> void:
 	var s := _snapshot()
 	if not _snap.is_empty() and int(s.runs) == int(_snap.runs) and not is_instance_valid(_mission):
-		if int(s.roster) > int(_snap.roster):
+		if int(s.crew) > int(_snap.crew) and int(_snap.crew) > 0:
 			play("hire")
-		elif int(s.eddies) < int(_snap.eddies):
+		elif int(s.shards) < int(_snap.shards) or int(s.eddies) < int(_snap.eddies):
 			play("purchase")
 	_snap = s
 

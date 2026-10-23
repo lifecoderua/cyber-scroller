@@ -5,7 +5,7 @@ downloading and keep a copy of the license text next to imported files
 (for example `assets/third_party/<pack>/LICENSE.txt`).
 
 The game currently uses procedural sprites from ASCII templates at 16x24, so roughly 16-32 px tall humanoids fit
-best. The project texture filter is Nearest and the viewport is 640x360.
+best. The project texture filter is Nearest and the viewport is 360x640 (portrait).
 
 ## Shortlist
 

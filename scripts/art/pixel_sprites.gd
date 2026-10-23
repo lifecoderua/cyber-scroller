@@ -65,6 +65,10 @@ const OVERLAYS := {
 	"bigun": [[10, 7, "ggggggggg"], [11, 7, "gggggggga"], [12, 9, "gg"]],
 	"cables": [[7, 2, "w"], [8, 1, "w"], [9, 1, "w"], [10, 2, "w"]],
 	"spikes": [[0, 5, "a.a.a"], [1, 4, "a"], [1, 11, "a"]],
+	"shieldwall": [[7, 12, "gg"], [8, 11, "oggo"], [9, 11, "ogwo"], [10, 11, "oggo"], [11, 11, "ogwo"],
+		[12, 11, "oggo"], [13, 11, "ogwo"], [14, 11, "oggo"], [15, 12, "gg"]],
+	"grenades": [[14, 4, "a.a.a"]],
+	"scope": [[10, 9, "..a"]],
 }
 
 const SKIN_TONES := [Color("f2c7a5"), Color("d9a07a"), Color("a86b4c"), Color("7a4a32"), Color("c8d0d8")]
@@ -72,15 +76,20 @@ const HAIR_COLORS := [Color("1b1b2a"), Color("ff3d81"), Color("2de2e6"), Color("
 
 ## Base palettes per unit kind. Missing "s"/"h" keys are filled from the vseed.
 const KINDS := {
-	# runners
+	# mercs
 	"solo": {"pal": {"j": "7a1f3d", "J": "4e1428", "p": "2a2a3d", "b": "15151f", "a": "ff3d81", "v": "ff3d81", "g": "8a8fa8", "w": "ff9fc4"}, "over": ["blades"]},
-	"gunner": {"pal": {"j": "6b5a1e", "J": "463b12", "p": "2e3324", "b": "15151f", "a": "f9c80e", "v": "f9c80e", "g": "6d7285", "w": "ffe066"}, "over": ["rifle"]},
 	"medtech": {"pal": {"j": "d8e2e8", "J": "9aa8b2", "p": "2a3a3d", "b": "15151f", "a": "4cff8f", "v": "4cff8f", "g": "6d7285", "w": "4cff8f"}, "over": ["medcross", "pistol"]},
 	"techie": {"pal": {"j": "1e4f5c", "J": "123640", "p": "2a2a3d", "b": "15151f", "a": "2de2e6", "v": "2de2e6", "g": "8a8fa8", "w": "2de2e6"}, "over": ["backpack", "pistol"]},
+	"borg": {"pal": {"j": "5a5f70", "J": "3a3e4c", "p": "2a2a3d", "b": "15151f", "a": "ff9f1c", "v": "ff9f1c", "g": "8a8fa8", "w": "ffb84a", "s": "9aa4b4"}, "over": ["pads", "bigun"]},
+	"sniper": {"pal": {"j": "4a4a26", "J": "30301a", "p": "2a2e20", "b": "15151f", "a": "f9c80e", "v": "f9c80e", "g": "6d7285", "w": "ffe066", "h": "3a3a1e"}, "over": ["hood", "rifle", "scope"]},
 	# enemies
 	"ganger": {"pal": {"j": "2b2b2b", "J": "1a1a1a", "p": "3d2a5c", "b": "15151f", "a": "ff6a2a", "v": "ff6a2a", "g": "8a8fa8", "w": "ff6a2a", "h": "ff6a2a"}, "over": ["mohawk", "pipe"]},
 	"gunman": {"pal": {"j": "3a3f52", "J": "262a38", "p": "1f2230", "b": "101018", "a": "ff2a2a", "v": "ff2a2a", "g": "6d7285", "w": "ff2a2a"}, "over": ["pistol"]},
 	"heavy": {"pal": {"j": "4a5a3a", "J": "2f3a24", "p": "2a3020", "b": "101018", "a": "ff9f1c", "v": "ff9f1c", "g": "5a5f70", "w": "ff9f1c", "s": "7d8796"}, "over": ["pads", "bigun"]},
+	"rusher": {"pal": {"j": "3a1a1a", "J": "240f0f", "p": "2a2a3d", "b": "15151f", "a": "ff2a6a", "v": "ff2a6a", "g": "8a8fa8", "w": "ff7a9a", "h": "ff2a6a"}, "over": ["mohawk", "blades"]},
+	"shield": {"pal": {"j": "2c3e5c", "J": "1c2a40", "p": "1f2230", "b": "101018", "a": "8ab4ff", "v": "8ab4ff", "g": "6d7aa0", "w": "cfe0ff"}, "over": ["shieldwall"]},
+	"esniper": {"pal": {"j": "3a2020", "J": "261414", "p": "1f1a22", "b": "101018", "a": "ff2a2a", "v": "ff2a2a", "g": "6d7285", "w": "ff5a5a", "h": "2a1a1a"}, "over": ["hood", "rifle", "scope"]},
+	"grenadier": {"pal": {"j": "4a3a1a", "J": "302610", "p": "2a2a1f", "b": "101018", "a": "ff9f1c", "v": "ff9f1c", "g": "6d7285", "w": "ffb84a"}, "over": ["backpack", "grenades", "pistol"]},
 	"netrunner": {"pal": {"j": "3d1f5c", "J": "28143d", "p": "1f1430", "b": "101018", "a": "b388ff", "v": "b388ff", "g": "6d7285", "w": "b388ff", "h": "3d1f5c"}, "over": ["hood", "cables"]},
 	"cyberpsycho": {"pal": {"j": "5c0f1a", "J": "3d0a12", "p": "2a1a1a", "b": "101018", "a": "ff2a2a", "v": "ff2a2a", "g": "a0a5b8", "w": "ff2a2a", "s": "b8c0cc", "h": "15151f"}, "over": ["spikes", "pads", "blades"]},
 }
@@ -101,6 +110,25 @@ const DRONE := [
 ]
 const DRONE_PAL := {"j": "2f3446", "J": "1c2030", "g": "8a8fa8", "a": "ff2a2a", "v": "ff6a6a"}
 
+## Static turret, bottom-aligned in a 16x24 frame, barrel to the right.
+const TURRET := [
+	"......oooo......",
+	".....ogggoooooo.",
+	".....ogvggggggga",
+	".....oggggoooooo",
+	"......oooo......",
+	".......og.......",
+	"......oggo......",
+	".....oggggo.....",
+	"....ojjjjjjo....",
+	"...ojjJJJJjjo...",
+	"...oooooooooo...",
+]
+const TURRET_PALS := {
+	"turret": {"j": "3a3f52", "J": "262a38", "g": "6d7285", "a": "ff2a2a", "v": "ff5a5a"},
+	"turret_ally": {"j": "1e4f5c", "J": "123640", "g": "8a8fa8", "a": "2de2e6", "v": "7ae8ff"},
+}
+
 static var _cache := {}
 
 
@@ -112,6 +140,8 @@ static func frames(kind: String, vseed := 0) -> Array:
 	var out := []
 	if kind == "drone":
 		out = _drone_frames()
+	elif TURRET_PALS.has(kind):
+		out = _turret_frames(kind)
 	else:
 		var pal := _palette(kind, vseed)
 		var over: Array = KINDS.get(kind, KINDS["gunman"]).over
@@ -189,6 +219,21 @@ static func _drone_frames() -> Array:
 	var atk := DRONE.duplicate()
 	atk[9] = ".....o.aa.o.aa.."
 	return [_texture(a, pal), _texture(b, pal), _texture(atk, pal)]
+
+
+static func _turret_frames(kind: String) -> Array:
+	var pal := {"o": Color("0b0b14")}
+	for k in TURRET_PALS[kind]:
+		pal[k] = Color(TURRET_PALS[kind][k])
+	var rows := []
+	for i in H - TURRET.size() - 1:
+		rows.append("................")
+	rows.append_array(TURRET)
+	rows.append("................")
+	var atk := rows.duplicate()
+	atk = _stamp(atk, H - TURRET.size() + 1, 15, "w")
+	pal["w"] = Color("ffffff")
+	return [_texture(rows, pal), _texture(rows, pal), _texture(atk, pal)]
 
 
 ## 1x1 white texture, handy for tinted rects/particles.

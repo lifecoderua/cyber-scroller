@@ -85,7 +85,7 @@ func _shot(cam: float, path: String) -> void:
 		r.size = Vector2(32, 48)
 		r.position = Vector2(cam + 60 + i * 50, 244)
 		_units.add_child(r)
-	var kinds := ["solo", "gunner", "medtech", "ganger", "heavy"]
+	var kinds := ["solo", "borg", "medtech", "ganger", "heavy"]
 	for i in kinds.size():
 		var sp := Sprite2D.new()
 		sp.texture = PixelSprites.frames(kinds[i], i * 7)[0]

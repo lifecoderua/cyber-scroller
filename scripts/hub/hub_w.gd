@@ -133,23 +133,6 @@ static func restyle(b: Button, accent: Color, filled := false) -> void:
 	b.add_theme_color_override("font_pressed_color", Color.WHITE)
 
 
-static func xp_bar(r: Dictionary, width := 70.0) -> ProgressBar:
-	var p := ProgressBar.new()
-	p.show_percentage = false
-	p.custom_minimum_size = Vector2(width, 4)
-	p.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var lvl := int(r.level)
-	if lvl >= UnitDB.MAX_LEVEL:
-		p.value = 100
-	else:
-		p.value = 100.0 * int(r.xp) / UnitDB.xp_to_next(lvl)
-	var col: Color = UnitDB.CLASSES[r.cls].color
-	p.add_theme_stylebox_override("fill", UITheme.box(col, col, 0, 0, 0))
-	p.add_theme_stylebox_override("background", UITheme.box(Color("0a0a14"), Color("2a2a44"), 0, 0, 0))
-	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return p
-
-
 static func threat_color(t: int) -> Color:
 	return THREAT_COLORS[clampi(t, 1, 5) - 1]
 
@@ -162,36 +145,11 @@ static func class_color(cls: String) -> Color:
 	return UnitDB.CLASSES[cls].color
 
 
-## "RAM 4  CD 5s  x1" for actives, "DAEMON" for passives.
-static func soft_stats(id: String) -> String:
-	var d := SoftDB.get_def(id)
-	if d.get("kind", "") != "active":
-		return "DAEMON  passive"
-	var s := "RAM %d  " % int(d.ram)
-	s += ("CD %ss" % _num(float(d.cd))) if float(d.cd) > 0.0 else "NO CD"
-	if int(d.get("charges", 0)) > 0:
-		s += "  %d CHG" % int(d.charges)
-	return s
-
-
-## `bonus`: skill tree bonuses (Game.fixer_stats()) so the hub shows mission numbers.
-static func runner_stats_text(r: Dictionary, bonus := {}) -> String:
-	var s := UnitDB.runner_stats(r, bonus)
-	var rng := "MELEE" if s.melee else "RNG %d" % int(s.range)
-	return "HP %d  DMG %s  ARM %d  %s" % [int(s.hp), _num(snappedf(float(s.dmg), 0.1)), int(s.armor), rng]
-
-
 static func _num(f: float) -> String:
 	if is_equal_approx(f, roundf(f)):
 		return str(int(roundf(f)))
 	return "%.1f" % f
 
 
-static func short_name(r: Dictionary) -> String:
-	var n: String = r.name
-	var q := n.find("\"")
-	if q >= 0:
-		var q2 := n.find("\"", q + 1)
-		if q2 > q:
-			return n.substr(q + 1, q2 - q - 1)
-	return n
+static func short_name(m: Dictionary) -> String:
+	return UnitDB.short_name(m)

@@ -1,6 +1,6 @@
-extends HBoxContainer
-## NODES tab: the fixer skill tree. Pannable node graph on the left, info / buy panel
-## on the right. Bought with Data Shards (Game.shards); see TreeDB.
+extends VBoxContainer
+## NET tab: the fixer skill tree. Pannable node graph on top, info / buy panel below
+## (thumb zone). Bought with Data Shards (Game.shards); see TreeDB.
 
 var hub: Control
 var graph: TreeGraph
@@ -13,7 +13,7 @@ func setup(h: Control) -> void:
 	add_theme_constant_override("separation", 6)
 
 	var frame := HubW.panel(HubShard.COLOR.darkened(0.45), Color(0.02, 0.02, 0.05, 0.92), 1, 0)
-	frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(frame)
 	var holder := Control.new()
 	holder.clip_contents = true
@@ -57,7 +57,7 @@ func setup(h: Control) -> void:
 	holder.add_child(hint)
 
 	var right := HubW.panel(HubShard.COLOR.darkened(0.4), HubW.PANEL_BG, 1, 7)
-	right.custom_minimum_size.x = 186
+	right.custom_minimum_size.y = 200
 	add_child(right)
 	_info = HubW.vbox(4)
 	right.add_child(_info)
@@ -180,14 +180,19 @@ func _effect_line(key: String, text: String, col: Color) -> Control:
 func _build_overview() -> void:
 	_info.add_child(HubW.lbl("DATA SHARDS", 9, UITheme.TEXT_DIM))
 	_info.add_child(_shard_row(Game.shards, 18))
-	_info.add_child(HubW.wrap(HubW.lbl("Permanent upgrades for the fixer. Every job pays shards: 1 per fight cleared, a bonus for the boss, and even a wipe leaves a little.", 9, UITheme.TEXT)))
+	_info.add_child(HubW.wrap(HubW.lbl("Permanent upgrades for the fixer. Every run pays shards: 1 per fight won, a bonus for the target, and even a burned run leaves a little.", 9, UITheme.TEXT)))
 	_info.add_child(HubW.line(Color(HubShard.COLOR, 0.3)))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 10)
 	for key in ["net", "cred", "biz", "intel"]:
 		var b: Dictionary = TreeDB.BRANCHES[key]
 		var row := HubW.vbox(0)
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(HubW.lbl(String(b.name), 9, b.color))
 		row.add_child(HubW.lbl(String(b.blurb), 8, UITheme.TEXT_DIM))
-		_info.add_child(row)
+		grid.add_child(row)
+	_info.add_child(grid)
 	_info.add_child(HubW.spacer(true))
 	var n := Game.nodes_affordable()
 	var complete := true

@@ -1,6 +1,6 @@
 # Platforms: Web, Android, iOS, macOS
 
-Godot 4.7, GL Compatibility renderer, 640x360 viewport (`canvas_items` + `expand`), sensor landscape.
+Godot 4.7, GL Compatibility renderer, 360x640 portrait viewport (`canvas_items` + `expand`), portrait orientation.
 Export presets live in `export_presets.cfg` (Web, Android, macOS). Output goes to `build/` (git-ignored).
 Preset key names were checked against the Godot source (`platform/*/export/export_plugin.cpp`); the editor
 fills in any missing keys with defaults the first time the Export dialog is opened.
@@ -34,7 +34,7 @@ Preset choices (see `export_presets.cfg`):
 - VRAM compression: both desktop (S3TC/BPTC) and mobile (ETC2/ASTC) are on, so the build runs on every GPU.
   This makes the pck bigger; trim after testing if size matters.
 - `html/canvas_resize_policy=2` (Adaptive): the canvas matches the browser window; the project's stretch mode
-  scales the 640x360 viewport.
+  scales the 360x640 viewport (letterboxing is avoided by `expand`: wider screens get more width).
 - Default HTML shell, PWA off.
 
 Test locally (browsers refuse `file://`):
@@ -66,7 +66,7 @@ and mark it "played in browser".
   `DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)` from `_input`/`_unhandled_input` or a
   Button `pressed` handler, never from a timer or `_ready`.
 - **Touch browsers**: `emulate_mouse_from_touch` (default on) keeps mouse-based UI working.
-- **Keyboard focus**: `html/focus_canvas_on_start=true` so `1..6`, Space, Esc, F work immediately. In an iframe
+- **Keyboard focus**: `html/focus_canvas_on_start=true` so `1..9`, Space, Esc, A, F work immediately. In an iframe
   (itch.io) the player must click once first.
 - **No threads**: `Thread`/`WorkerThreadPool` degrade to synchronous behavior in single-threaded builds.
 - **No OS-level features**: no `OS.execute`, limited file dialogs.
@@ -96,7 +96,7 @@ keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
 ### Preset notes
 
 - Orientation is not a preset option in Godot 4: it comes from `display/window/handheld/orientation`
-  (value 4 = sensor landscape, already set).
+  (value 1 = portrait, already set).
 - Architectures: `arm64-v8a` and `armeabi-v7a` on; x86 targets are only for emulators.
 - `gradle_build/min_sdk` and `target_sdk` are left empty so Godot's defaults for 4.7 apply. Gradle build is off
   (uses the prebuilt template). Turn it on only for plugins, AAB output, or custom manifest changes.
@@ -115,9 +115,10 @@ keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
   the window/stretch transform, and keep HUD margins at least the insets. Re-query on
   `NOTIFICATION_WM_SIZE_CHANGED`.
 - **Touch targets**: aim for 44-48 dp (about 7 mm). On a ~6" 1080p phone one virtual pixel is about 3 physical
-  pixels, so soft cards and buttons should be at least 24-28 virtual px high with 4+ px gaps.
-- **Pause on focus loss**: handle `NOTIFICATION_APPLICATION_PAUSED` / `RESUMED` (and `APPLICATION_FOCUS_OUT/IN`)
-  by entering the manual pause state.
+  pixels, so EXEC buttons, chip tiles and other buttons should be at least 24-28 virtual px high with 4+ px gaps.
+- **Pause on focus loss**: the fight scene enters the manual pause on `NOTIFICATION_APPLICATION_PAUSED` and
+  `APPLICATION_FOCUS_OUT`. Between fights the run is saved after every step, so closing the app is safe; a run
+  closed mid-fight resumes at the start of that fight.
 - **Back button**: handle `NOTIFICATION_WM_GO_BACK_REQUEST`.
 - Immersive mode is on (system bars hidden).
 - `user://` is app-private storage and is cleared on uninstall (`retain_data_on_uninstall=false`).
@@ -127,7 +128,7 @@ keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
 - Needs macOS, Xcode, an Apple Developer account (free for device testing, paid for TestFlight/App Store), and
   the iOS export template (part of the standard templates).
 - Add an "iOS" preset: team ID, bundle identifier (e.g. `com.lifecoder.cyberscroller`), icons, launch screen.
-  Orientation comes from the project setting (already landscape).
+  Orientation comes from the project setting (already portrait).
 - Godot exports an Xcode project; build and sign in Xcode. Keep `rendering_method.mobile` at `gl_compatibility`
   (already set).
 - Use the simulator to smoke-test layouts and safe areas on notched devices.
