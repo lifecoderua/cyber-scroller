@@ -4,7 +4,7 @@ extends Node
 ##   Audio.play("hit")                    # name from SfxPresets, optional volume_db / pitch
 ##   Audio.set_music("mission")           # "hub" | "mission" | "boss" | "" (silence)
 ##   Audio.attach_mission(self)           # mission scene: pause whoosh, music filter, mute button
-##   Audio.on_sim_event(ev)               # mission scene: CombatSim / DeckEngine event -> SFX
+##   Audio.on_sim_event(ev)               # fight scene: DiceCombat event -> SFX
 ##
 ## Everything is generated at startup in small jobs spread over frames (no threads, no
 ## assets). A sound requested before its turn is rendered on the spot.
@@ -221,113 +221,84 @@ func attach_mission(m: Node) -> void:
 
 
 func on_sim_event(ev: Dictionary) -> void:
-	var sim: CombatSim = _mission.get("sim") if is_instance_valid(_mission) else null
+	var c: DiceCombat = _mission.get("c") if is_instance_valid(_mission) else null
 	match String(ev.get("type", "")):
-		"attack":
-			var a: CombatSim.Unit = sim.get_unit(ev.src) if sim else null
-			if a == null:
-				return
-			if a.side() == CombatSim.MERC:
-				if a.melee and a.kind != "borg":
-					play("melee_slash")
-				elif a.kind == "borg":
-					play("shot", 0.0, 0.75)
-				elif a.kind == "sniper":
-					play("shot", 1.0, 0.9)
-				else:
-					play("pistol", -1.0, 1.15 if a.kind in ["techie", "turret_ally"] else 1.0)
-			else:
-				if a.boss:
-					play("melee_slash", 1.0, 0.6)
-				elif a.melee:
-					play("melee_slash", -3.0, 0.8)
-				elif a.flying or a.machine:
-					play("pistol", -5.0, 1.4)
-				else:
-					play("pistol", -3.0, 0.78)
+		"die_used":
+			var f: Dictionary = ev.get("face", {})
+			match String(f.get("k", "")):
+				"atk", "cleave", "rage", "slice":
+					play("melee_slash", 0.0, 1.3 if f.k == "slice" else 1.0)
+				"shot", "pierce":
+					play("shot" if f.k == "pierce" else "pistol")
+				"blast", "turret":
+					play("explosion", -2.0, 1.1)
+				"shield", "taunt":
+					play("shield")
+				"heal", "triage":
+					play("heal")
+				"stun", "mark", "dodge":
+					play("zap", -2.0, 1.4)
+				"ram", "focus":
+					play("coin", -4.0, 1.4)
+				"glitch":
+					play("ui_error")
 		"damage":
 			var kind := String(ev.get("kind", ""))
-			var t: CombatSim.Unit = sim.get_unit(ev.target) if sim else null
-			var on_merc := t != null and t.team == CombatSim.MERC
+			var t: DiceCombat.Unit = c.get_unit(ev.target) if c else null
+			var on_merc := t != null and t.team == DiceCombat.CREW
 			if float(ev.get("absorbed", 0.0)) > 0.0 and float(ev.absorbed) >= float(ev.amount) - 0.5:
 				play("zap", -8.0, 1.8)
 			elif kind in ["charge", "snipe"]:
 				play("slam", 2.0, 0.8)
-			elif kind == "dot":
+			elif kind == "burn":
 				play("hit", -8.0, 1.4)
-			elif ev.get("crit", false):
-				play("crit")
-			elif kind in ["melee", "ranged", "hack", "blast"]:
+			else:
 				play("hit", 2.0 if kind == "hack" else 0.0, 0.85 if on_merc else 1.0)
 		"heal":
-			if not ev.get("quiet", false):
-				play("heal")
+			play("heal", -4.0)
 		"death":
-			var u: CombatSim.Unit = sim.get_unit(ev.unit) if sim else null
-			if u and u.team == CombatSim.MERC and u.merc_id != "":
+			var u: DiceCombat.Unit = c.get_unit(ev.unit) if c else null
+			if u and u.team == DiceCombat.CREW:
 				play("runner_down")
 			else:
 				play("enemy_death")
 				if u and u.boss:
 					play("explosion", 2.0, 0.7)
 		"loot":
-			var n := clampi(floori(float(ev.get("amount", 1)) / 6.0) + 1, 1, 3)
-			for i in n:
-				play_later("coin", 0.25 + i * 0.09, -3.0, 1.0 + i * 0.1)
-		"payload":
-			if ev.get("echo", false):
-				play("hack_cast", -6.0, 1.3)
-				return
-			var col: Color = ev.get("color", Color.WHITE)
-			# Each payload gets its own chirp pitch from its colour.
-			var pitch := 0.8 + col.h * 0.6 if col.s > 0.1 else 0.7
-			play("hack_cast", -2.0, pitch)
-			match String(ev.get("chip", "")):
-				"patch":
-					play_later("heal", 0.05)
-				"firewall":
-					play_later("shield", 0.05)
-				"shock", "sonic":
-					play_later("zap", 0.05)
-				"hijack", "contagion":
-					play_later("zap", 0.05, -2.0, 0.7)
-		"skill":
-			match String(ev.get("skill", "")):
-				"sandevistan":
-					play("melee_slash", 1.0, 1.3)
-					play_later("zap", 0.08, -4.0, 1.6)
-				"bulwark":
-					play("slam")
-				"stim":
-					play("heal", -2.0, 0.9)
-				"deploy":
-					play("shield", -2.0, 0.7)
-				"mark":
-					play("telegraph", -6.0, 1.6)
-				"blast", "contagion":
-					play("explosion", -2.0, 1.1)
-		"telegraph":
-			var u: CombatSim.Unit = sim.get_unit(ev.unit) if sim else null
-			play("telegraph", 2.0 if u and u.boss else 0.0, 0.8 if u and u.boss else 1.0)
-		"interrupt":
+			play_later("coin", 0.2, -3.0)
+		"hack":
+			var d := ChipDB.get_def(String(ev.get("ref", "")))
+			var col: Color = d.get("color", Color.WHITE)
+			play("hack_cast", 0.0, 0.8 + col.h * 0.6 if col.s > 0.1 else 0.7)
+		"stun":
 			play("interrupted")
-		"cast_fire":
-			match String(ev.get("name", "")):
-				"berserk_charge":
+		"intent_fire":
+			var f: Dictionary = ev.get("face", {})
+			var u: DiceCombat.Unit = c.get_unit(ev.unit) if c else null
+			match String(f.get("k", "")):
+				"charge":
 					play("slam", 0.0, 0.9)
-				"aim":
+				"snipe":
 					play("shot", 3.0, 0.6)
-				"grenade":
+				"blast":
 					play("explosion")
+				"upload":
+					play("zap", 0.0, 0.7)
+				"guard":
+					play("shield", -4.0, 0.8)
+				"rampage":
+					play("enrage")
 				_:
-					play("zap", 0.0, 0.7 if not ev.get("blocked", false) else 1.6)
-		"enrage", "psycho":
+					play("melee_slash" if u and not String(f.get("k", "")) in ["shot"] else "pistol", -2.0, 0.8)
+		"blocked", "dodge":
+			play("zap", -6.0, 2.0)
+		"reroll", "turn_start":
+			play("ui_click", -4.0, 1.3)
+		"enrage":
 			play("enrage")
 		"overheat":
 			play("enrage", -2.0, 1.4)
 			play_later("ui_error", 0.1)
-		"dodge":
-			play("zap", -6.0, 2.0)
 		"wave_start":
 			if ev.get("boss", false):
 				play("boss_warning")
@@ -349,9 +320,9 @@ func _poll_mission() -> void:
 	var frozen := false
 	var targeting := false
 	if is_instance_valid(_mission) and _mission.is_inside_tree():
-		var sim: CombatSim = _mission.get("sim")
+		var c: DiceCombat = _mission.get("c")
 		targeting = int(_mission.get("targeting")) >= 0
-		frozen = (bool(_mission.get("paused")) or targeting) and sim != null and sim.outcome == ""
+		frozen = (bool(_mission.get("paused")) or targeting) and c != null and c.outcome == ""
 	elif _mission != null:
 		_mission = null
 	if frozen != _frozen:

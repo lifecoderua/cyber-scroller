@@ -1,14 +1,14 @@
 extends PanelContainer
-## Deck editor (between fights): the thread board on top with a live dry-run readout per
-## thread, the spare-chip drawer below. Tap a chip, then a slot (or a slot, then a chip).
-## Slot 1 of every thread takes a trigger (yellow); the rest run left to right.
+## Deck loadout (between fights): HACK slots (active, spend RAM in a fight) and DAEMON slots
+## (passive, react to dice events), plus the spare-chip drawer. Tap a spare chip, then a slot
+## of its kind (or a slot, then a chip). Port daemons go dark without their implant.
 
-const FILTERS := [["ALL", ""], ["TRG", "trigger"], ["SEL", "selector"], ["MOD", "modifier"], ["PAY", "payload"]]
+const FILTERS := [["ALL", ""], ["HACK", "hack"], ["DAEMON", "daemon"]]
 
 var screen
 var run: RunState
 var _sel_spare := -1
-var _sel_slot := Vector2i(-1, -1)
+var _sel_slot := ["", -1]       # [kind, index]
 var _filter := ""
 var _board: VBoxContainer
 var _info: VBoxContainer
@@ -29,9 +29,9 @@ func setup(s) -> void:
 	tv.add_child(HubW.lbl("CYBERDECK  //  %s" % String(ChipDB.CHASSIS.name).to_upper(), 14, UITheme.CYAN))
 	var fx := run.fixer
 	var ch: Dictionary = ChipDB.CHASSIS
-	tv.add_child(HubW.lbl("RAM %d  ·  regen %.1f/s  ·  HEAT cap %d  ·  %d threads" % [
-		int(ch.max_ram + float(fx.get("max_ram", 0.0))), ch.ram_regen * (1.0 + float(fx.get("ram_regen_pct", 0.0))),
-		int(ch.heat_cap + float(fx.get("heat_cap", 0.0))), run.threads.size()], 9, UITheme.TEXT_DIM))
+	tv.add_child(HubW.lbl("RAM %d start, +%d/turn, cap %d  ·  %d rerolls  ·  HEAT cap %d" % [
+		int(ch.ram_start) + int(fx.get("start_ram", 0)), int(ch.ram_turn), int(ch.ram_cap) + int(fx.get("max_ram", 0)),
+		int(ch.rerolls) + int(fx.get("rerolls", 0)), int(ch.heat_cap) + int(fx.get("heat_cap", 0))], 9, UITheme.TEXT_DIM))
 	head.add_child(tv)
 	var close := HubW.button("DONE", func(): screen.close_overlay(), 12, UITheme.CYAN, true)
 	close.custom_minimum_size = Vector2(70, 36)
@@ -70,50 +70,43 @@ func refresh() -> void:
 func _build_board() -> void:
 	HubW.clear(_board)
 	var ports := run.crew_ports()
-	for t in run.threads.size():
-		var chips: Array = run.threads[t]
-		var p := HubW.panel(Color("2a2a48"), HubW.PANEL_BG, 1, 5)
-		var v := HubW.vbox(3)
+	for k in ["hack", "daemon"]:
+		var p := HubW.panel(Color(ChipDB.kind_color(k), 0.4), HubW.PANEL_BG, 1, 6)
+		var v := HubW.vbox(4)
 		p.add_child(v)
-		var row := HubW.hbox(4)
-		var lab := HubW.lbl("T%d" % (t + 1), 11, UITheme.TEXT)
-		lab.custom_minimum_size.x = 20
-		lab.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		row.add_child(lab)
-		for s in chips.size():
+		var t := "HACKS  (active: tap in a fight, costs RAM and Heat)" if k == "hack" else "DAEMONS  (passive: react to dice events)"
+		v.add_child(HubW.lbl(t, 9, ChipDB.kind_color(k)))
+		var row := HubW.hbox(5)
+		var list := run.slots_of(k)
+		for i in list.size():
 			var tile := ChipTile.new()
-			tile.ref = chips[s]
-			tile.custom_minimum_size = Vector2(52 if chips.size() <= 4 else 44, 50)
-			tile.hint = "TRIGGER" if s == 0 else str(s + 1)
-			tile.selected = _sel_slot == Vector2i(t, s)
-			tile.pressed.connect(func(_x): _on_slot(t, s))
+			tile.ref = list[i]
+			tile.custom_minimum_size = Vector2(58, 50)
+			tile.hint = "RAM %d" % ChipDB.cost(list[i]) if k == "hack" and list[i] != "" else ("DARK" if ChipDB.is_dark(list[i], ports) else "")
+			tile.dim = ChipDB.is_dark(list[i], ports)
+			tile.selected = _sel_slot == [k, i]
+			tile.pressed.connect(func(_x): _on_slot(k, i))
 			row.add_child(tile)
-		var st := ChipDB.thread_stats(chips, run.fixer)
-		var cost := HubW.vbox(0)
-		cost.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		cost.add_child(HubW.lbl("%d RAM" % int(st.ram), 10, UITheme.CYAN))
-		cost.add_child(HubW.lbl("%.1fs" % float(st.cycle), 9, UITheme.TEXT_DIM))
-		row.add_child(cost)
 		v.add_child(row)
-		v.add_child(HubW.wrap(HubW.lbl(ChipDB.readout(chips, run.fixer), 9, UITheme.TEXT)))
-		var warn := ChipDB.thread_warning(chips, ports)
-		if warn != "":
-			v.add_child(HubW.wrap(HubW.lbl("! " + warn, 9, UITheme.RED)))
+		for i in list.size():
+			if list[i] != "":
+				var l := HubW.wrap(HubW.lbl("%s: %s" % [ChipDB.display_name(list[i]), ChipDB.desc(list[i])], 8, UITheme.TEXT if not ChipDB.is_dark(list[i], ports) else UITheme.RED))
+				v.add_child(l)
 		_board.add_child(p)
 
 
 func _build_info() -> void:
 	HubW.clear(_info)
 	var ref := ""
-	var from_slot := _sel_slot.x >= 0
+	var from_slot: bool = _sel_slot[1] >= 0
 	if _sel_spare >= 0 and _sel_spare < run.spare.size():
 		ref = run.spare[_sel_spare]
 	elif from_slot:
-		ref = run.threads[_sel_slot.x][_sel_slot.y]
+		ref = run.slots_of(_sel_slot[0])[_sel_slot[1]]
 	if ref == "":
-		var txt := "Tap a spare chip, then a slot. Slot 1 = trigger (when). Then selectors (who), modifiers (how, stack on the next payload) and payloads (what)."
+		var txt := "Tap a spare chip, then a slot of its kind. Hacks are your active tools in a fight; daemons trigger by themselves."
 		if from_slot:
-			txt = "Empty slot. Tap a spare chip below to put it here."
+			txt = "Empty slot. Tap a spare chip of this kind to slot it."
 		_info.add_child(HubW.wrap(HubW.lbl(txt, 9, UITheme.TEXT_DIM)))
 		return
 	_info.add_child(RunW.chip_block(ref, 3))
@@ -122,16 +115,9 @@ func _build_info() -> void:
 		var rm := HubW.button("REMOVE", _remove, 10, UITheme.MAGENTA)
 		rm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(rm)
-		if _sel_slot.y > 0:
-			var left := HubW.button("<", func(): _move(-1), 11, UITheme.TEXT_DIM)
-			left.custom_minimum_size.x = 40
-			row.add_child(left)
-			var right := HubW.button(">", func(): _move(1), 11, UITheme.TEXT_DIM)
-			right.custom_minimum_size.x = 40
-			row.add_child(right)
 	else:
 		var k := ChipDB.kind(ref)
-		row.add_child(HubW.lbl("Now tap a %s." % ("TRIGGER slot (1)" if k == "trigger" else "slot 2+"), 10, ChipDB.kind_color(k)))
+		row.add_child(HubW.lbl("Now tap a %s slot." % k.to_upper(), 10, ChipDB.kind_color(k)))
 	_info.add_child(row)
 
 
@@ -143,7 +129,7 @@ func _build_drawer() -> void:
 		var b := HubW.button(f[0], func():
 			_filter = f[1]
 			_build_drawer(), 8, col, on)
-		b.custom_minimum_size = Vector2(34, 24)
+		b.custom_minimum_size = Vector2(44, 24)
 		_filter_row.add_child(b)
 	HubW.clear(_drawer)
 	var shown := 0
@@ -163,49 +149,36 @@ func _build_drawer() -> void:
 
 
 func _on_spare(i: int) -> void:
-	if _sel_slot.x >= 0:
-		_place(_sel_slot.x, _sel_slot.y, i)
+	if _sel_slot[1] >= 0:
+		_place(_sel_slot[0], _sel_slot[1], i)
 		return
 	_sel_spare = -1 if _sel_spare == i else i
 	refresh()
 
 
-func _on_slot(t: int, s: int) -> void:
+func _on_slot(k: String, i: int) -> void:
 	if _sel_spare >= 0:
-		_place(t, s, _sel_spare)
+		_place(k, i, _sel_spare)
 		return
-	_sel_slot = Vector2i(-1, -1) if _sel_slot == Vector2i(t, s) else Vector2i(t, s)
+	_sel_slot = ["", -1] if _sel_slot == [k, i] else [k, i]
 	refresh()
 
 
-func _place(t: int, s: int, spare_i: int) -> void:
+func _place(k: String, i: int, spare_i: int) -> void:
 	var ref: String = run.spare[spare_i]
-	var k := ChipDB.kind(ref)
-	if s == 0 and k != "trigger":
-		screen.deny(null, "Slot 1 takes a TRIGGER (yellow).")
+	if ChipDB.kind(ref) != k:
+		screen.deny(null, "That's a %s: it goes in a %s slot." % [ChipDB.kind(ref).to_upper(), ChipDB.kind(ref).to_upper()])
 		return
-	if s > 0 and k == "trigger":
-		screen.deny(null, "Triggers only go in slot 1.")
-		return
-	if run.place_chip(t, s, spare_i):
+	if run.place_chip(i, spare_i):
 		Audio.play("ui_click", 0.0, 1.3)
 		_sel_spare = -1
-		_sel_slot = Vector2i(-1, -1)
+		_sel_slot = ["", -1]
 		Game.run_changed()
 		refresh()
 
 
 func _remove() -> void:
-	if run.remove_chip(_sel_slot.x, _sel_slot.y):
-		_sel_slot = Vector2i(-1, -1)
-		Game.run_changed()
-		refresh()
-
-
-func _move(dir: int) -> void:
-	var t := _sel_slot.x
-	var s := _sel_slot.y
-	if run.swap_slots(t, s, s + dir):
-		_sel_slot = Vector2i(t, s + dir)
+	if run.remove_chip(_sel_slot[0], _sel_slot[1]):
+		_sel_slot = ["", -1]
 		Game.run_changed()
 		refresh()

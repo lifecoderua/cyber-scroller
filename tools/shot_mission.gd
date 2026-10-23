@@ -1,8 +1,9 @@
 extends SceneTree
-## Dev tool: runs a fight and saves screenshots of combat, the EXEC targeting slow-mo, an
-## intel sheet, the boss telegraph and the end panel. Needs rendering (run WITHOUT --headless):
+## Dev tool: runs a dice fight and saves screenshots: the roll phase, a selected die with its
+## targets, a hack being aimed, a later turn and the end panel. Needs rendering (run WITHOUT
+## --headless):
 ##   godot --path . --script res://tools/shot_mission.gd -- <out_prefix> [threat] [node: fight|elite|boss]
-## Writes <out_prefix>_combat.png, _target.png, _intel.png, _late.png, _end.png
+## Writes <out_prefix>_roll.png, _die.png, _hack.png, _late.png, _end.png
 ## NOTE: this resets user://save.json.
 
 var _out := "/tmp/fight"
@@ -24,21 +25,10 @@ func _init() -> void:
 func _frames(n: int) -> void:
 	for i in n:
 		await process_frame
-		_unpause()
-
-
-## The fight auto-pauses when the window loses focus (mobile / tab switch); tools run unfocused.
-var _m: Node = null
-var _hold_pause := false
-
-
-func _unpause() -> void:
-	if _m and not _hold_pause:
-		_m.paused = false
 
 
 func _shot(name: String) -> void:
-	await _frames(2)
+	await _frames(3)
 	root.get_texture().get_image().save_png("%s_%s.png" % [_out, name])
 	print("saved %s_%s.png" % [_out, name])
 
@@ -63,9 +53,8 @@ func _run() -> void:
 	var run: RunState = game.run
 	run.choose_draft(0)
 	run.crew[0].implants = ["kerenzikov"]
-	run.threads[1] = ["on_dodge", "sel_self", "firewall", ""]
-	run.spare.append("on_low")
-	# Pick a node of the wanted type and jump there.
+	run.daemons[1] = "dodge_relay"
+	run.hacks[3] = "breach"
 	var target := -1
 	for n in run.map:
 		if n.type == _type:
@@ -73,57 +62,45 @@ func _run() -> void:
 			break
 	run.pos = -1
 	run.phase = "map"
-	run.node(target).row = 0  # make it reachable from the start
+	run.node(target).row = 0
 	run.enter(target)
 	var m: Node = load("res://scenes/mission.tscn").instantiate()
 	root.add_child(m)
-	_m = m
-	await _frames(5)
-	var sim: CombatSim = m.sim
-	m.speed_idx = 2
-	var guard := 0
-	while guard < 1500:
-		await _frames(1)
-		guard += 1
-		var casting := false
-		for e in sim.enemies():
-			casting = casting or (e.is_casting() and e.cast_t < e.cast_total * 0.6)
-		if sim.time > 9.0 and (casting or sim.time > 18.0):
+	await _wait(1.0)
+	var c: DiceCombat = m.c
+	c.dice[0].locked = true
+	await _shot("roll")
+	m._on_done()
+	await _frames(2)
+	var pick := -1
+	for d in c.live_dice():
+		if DiceDB.is_damage(d.face()) and not c.valid_targets(d).is_empty():
+			pick = d.index
 			break
-	m.speed_idx = 0
-	await _wait(0.3)
-	await _shot("combat")
-	m._on_exec(2)
-	await _wait(0.5)
-	var foes := sim.enemies()
-	if not foes.is_empty():
-		m.hover_id = foes[0].id
-	await _shot("target")
-	m._auto_target()
-	await _frames(4)
-	await _wait(0.2)
-	if not foes.is_empty():
-		m._open_info(foes[foes.size() - 1].id)
-	await _wait(0.3)
-	await _shot("intel")
-	m._close_info()
-	m.speed_idx = 2
-	var t0 := Time.get_ticks_msec()
-	while Time.get_ticks_msec() - t0 < 12000 and sim.outcome == "":
-		await _frames(1)
-		for u in sim.mercs():
-			u.hp = maxf(u.hp, u.max_hp * 0.4)
-	_hold_pause = true
-	m.paused = true
-	await _wait(0.3)
+	if pick >= 0:
+		m._on_die(m.die_views.filter(func(x): return x.get_meta("die") == pick)[0])
+	await _wait(0.4)
+	await _shot("die")
+	m.sel_die = -1
+	m._on_hack(0)
+	await _wait(0.4)
+	await _shot("hack")
+	m.hack_slot = -1
+	m.targeting = -1
+	for i in 2:
+		DiceBot.play_turn(c, "smart")
+		m._drain()
+		await _wait(2.5)
+		if c.outcome != "":
+			break
 	await _shot("late")
-	_hold_pause = false
-	m.paused = false
-	while sim.outcome == "":
-		for u in sim.mercs():
+	while c.outcome == "":
+		for u in c.mercs():
 			u.hp = u.max_hp
-		sim.step(0.5)
-		await _frames(1)
-	await _wait(2.6)
+		DiceBot.play_turn(c, "smart")
+		m._drain()
+		m.instant = true
+		await _frames(3)
+	await _wait(2.5)
 	await _shot("end")
 	quit()

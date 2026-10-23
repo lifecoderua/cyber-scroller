@@ -1,8 +1,9 @@
 extends SceneTree
 ## Dev tool: smoke-tests a whole run through main.tscn (headless OK):
-## hub -> job -> crew draft -> map -> fight scene -> loot / node screens -> ... -> target
-## -> run over -> hub debrief. Fights are fast-forwarded with the bot policy (manual
-## threads fire on their own selector). Backs up and restores user://save.json.
+## hub -> job -> crew draft -> map -> dice fight scene -> loot / node screens -> ... -> target
+## -> run over -> hub debrief. The first fight's first turn uses the scene's own taps
+## (reroll, dice, a hack, END TURN); the rest is played by the smart bot.
+## Backs up and restores user://save.json.
 ##   godot --headless --path . --script res://tools/sim_flow_check.gd
 
 const SAVE := "user://save.json"
@@ -62,24 +63,42 @@ func _run() -> void:
 					await _frames(3)
 				var m: Node = _screen(main)
 				_check(m.name == "Mission", "fight scene for node %d" % run.pos)
-				var sim: CombatSim = m.sim
-				var guard := 0
-				while sim.outcome == "" and guard < 4000:
-					# Keep the crew alive so the flow reaches the target.
-					for u in sim.mercs():
-						u.hp = maxf(u.hp, u.max_hp * 0.6)
-					sim.trace = minf(sim.trace, 60.0)
-					sim.step(0.25)
-					for i in sim.deck.threads.size():
-						if sim.deck.is_manual(i) and sim.deck.block_reason(i) == "":
-							m.targeting = i
-							m._auto_target()
-					m._drain_events()
-					guard += 1
-					if guard % 40 == 0:
+				m.instant = true
+				var c: DiceCombat = m.c
+				# The first turn goes through the scene's own buttons and taps.
+				if fights == 0:
+					m._on_reroll()
+					m._on_done()
+					for dv in m.die_views:
+						var d: DiceCombat.Die = c.dice[dv.get_meta("die")]
+						var ts := c.valid_targets(d)
+						if ts.is_empty():
+							continue
+						m._on_die(dv)
+						if ts.size() == 1 and ts[0] == d.owner:
+							m._on_die(dv)
+						else:
+							m._on_unit_tapped(ts[0])
 						await _frames(1)
-				await create_timer(1.6).timeout
-				_check(m.end_panel != null, "fight %d ended (%s, %d kills)" % [fights, sim.outcome, sim.kills])
+					m._on_hack(0)
+					var hts: Array = c.hack_targets(0) if c.hacks.size() > 0 else []
+					if not hts.is_empty() and m.hack_slot == 0:
+						m._on_unit_tapped(hts[0])
+					m._on_done()
+					await _frames(2)
+				var guard := 0
+				while c.outcome == "" and guard < 80:
+					# Keep the crew alive so the flow reaches the target.
+					for u in c.mercs():
+						u.hp = maxi(u.hp, int(ceil(u.max_hp * 0.6)))
+					c.trace = minf(c.trace, 60.0)
+					DiceBot.play_turn(c, "smart")
+					m._drain()
+					guard += 1
+					await _frames(2)
+				await _frames(5)
+				await create_timer(1.4).timeout
+				_check(m.end_panel != null, "fight %d ended (%s, %d kills, %d turns)" % [fights, c.outcome, c.kills, c.turn])
 				m._on_continue()
 				fights += 1
 				await _frames(4)

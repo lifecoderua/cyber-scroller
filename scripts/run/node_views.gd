@@ -116,7 +116,7 @@ func _ripper_card(i: int) -> Control:
 	var v := HubW.vbox(3)
 	v.add_child(RunW.merc_row(m, run.fixer))
 	if int(m.scars) > 0:
-		v.add_child(_service_row("Scar x%d (-%d%% max HP each)" % [int(m.scars), int(UnitDB.SCAR_HP * 100)], "TREAT %d €$" % run.ripper_price("treat"),
+		v.add_child(_service_row("Scar x%d (-1 max HP each)" % int(m.scars), "TREAT %d €$" % run.ripper_price("treat"),
 			func(): return run.ripper_treat(i), UITheme.GREEN))
 	for slot in ["weapon", "armor"]:
 		var ref := String(m.get(slot, ""))
@@ -205,13 +205,14 @@ func _safehouse(info: Dictionary) -> void:
 func _recompile() -> void:
 	var opts := []
 	var where := []
-	for t in run.threads.size():
-		for s in run.threads[t].size():
-			var ref: String = run.threads[t][s]
+	for k in ["hack", "daemon"]:
+		var list := run.slots_of(k)
+		for i in list.size():
+			var ref: String = list[i]
 			if ref != "" and ChipDB.tier(ref) < 2:
-				opts.append(["T%d: %s -> %s" % [t + 1, ChipDB.display_name(ref), ChipDB.display_name(ChipDB.upgraded(ref))],
+				opts.append(["%s: %s -> %s" % [k.to_upper(), ChipDB.display_name(ref), ChipDB.display_name(ChipDB.upgraded(ref))],
 					ChipDB.desc(ChipDB.upgraded(ref)), ChipDB.color(ref)])
-				where.append("thread:%d:%d" % [t, s])
+				where.append("%s:%d" % [k, i])
 	for i in run.spare.size():
 		var ref: String = run.spare[i]
 		if ChipDB.tier(ref) < 2:

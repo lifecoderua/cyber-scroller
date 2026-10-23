@@ -110,7 +110,7 @@ static func merc_dice(m: Dictionary, bonus := {}) -> Dictionary:
 			f.v += int(bump[2])
 	# Implants fill sockets (the chrome die has 3 slots after the signature).
 	var socket_faces: Array = []
-	for ref in m.get("implants", []):
+	for ref in Array(m.get("implants", [])).slice(0, UnitDB.sockets(m)):
 		var d := ItemDB.get_def(ref)
 		if d.has("face"):
 			var p: Array = d.face

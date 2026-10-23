@@ -68,28 +68,23 @@ func _run() -> void:
 	_check(audio._mission == m, "fight scene attached")
 	_check(audio._music_want == "mission", "mission music wanted")
 	_check(is_instance_valid(audio._mission_btn) and audio._mission_btn.is_inside_tree(), "mute button in the fight top bar")
-	m.paused = true
+	m.targeting = 0
 	await create_timer(0.6).timeout
-	_check(audio._frozen and audio._muffle > 0.9, "pause -> music muffled (%.2f)" % audio._muffle)
-	m.paused = false
-	await create_timer(0.6).timeout
-	_check(not audio._frozen and audio._muffle < 0.1, "unpause -> music clear (%.2f)" % audio._muffle)
-	m.targeting = 2
-	await _frames(2)
-	_check(audio._frozen, "EXEC targeting counts as frozen")
+	_check(audio._frozen and audio._muffle > 0.9, "hack targeting -> music muffled (%.2f)" % audio._muffle)
 	m.targeting = -1
+	await create_timer(0.6).timeout
+	_check(not audio._frozen and audio._muffle < 0.1, "targeting done -> music clear (%.2f)" % audio._muffle)
 	# Feed synthetic events through the audio hook.
-	var sim: CombatSim = m.sim
-	for u in sim.units:
-		audio.on_sim_event({"type": "attack", "src": u.id, "target": u.id, "ranged": not u.melee, "missed": false})
+	var c: DiceCombat = m.c
 	for ev in [
-		{"type": "damage", "target": 0, "amount": 10.0, "absorbed": 0.0, "crit": true, "kind": "melee", "src": 0, "color": Color.WHITE},
-		{"type": "payload", "thread": 0, "slot": 2, "chip": "shock", "targets": [], "color": Color("7ae8ff")},
-		{"type": "skill", "unit": 0, "skill": "sandevistan", "x": 0.0, "radius": 0.0, "targets": []},
-		{"type": "telegraph", "unit": 0, "name": "aim", "duration": 3.0, "target": 0},
-		{"type": "interrupt", "unit": 0, "thread": 2},
+		{"type": "die_used", "die": 0, "face": {"k": "atk", "v": 3}, "target": 1},
+		{"type": "die_used", "die": 1, "face": {"k": "shield", "v": 2}, "target": 1},
+		{"type": "damage", "target": c.units[0].id, "amount": 3, "absorbed": 0, "kind": "atk", "src": -1},
+		{"type": "hack", "ref": "short_circuit", "target": -1},
+		{"type": "intent_fire", "unit": c.units[0].id, "face": {"k": "snipe", "v": 6}, "target": -1},
+		{"type": "stun", "unit": c.units[0].id},
 		{"type": "overheat"},
-		{"type": "loot", "unit": 0, "amount": 12},
+		{"type": "loot", "unit": 0, "amount": 3},
 		{"type": "wave_start", "index": 2, "total": 3, "boss": true},
 	]:
 		audio.on_sim_event(ev)
@@ -104,7 +99,7 @@ func _run() -> void:
 	await _frames(70)
 
 	# 4. Back to the run; spending eddies plays 'purchase'.
-	sim.outcome = "won"
+	c.outcome = "won"
 	m._show_end()
 	await _frames(3)
 	m._on_continue()

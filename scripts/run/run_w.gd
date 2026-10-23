@@ -6,7 +6,7 @@ const SOURCE_COLORS := {"SALVAGE": Color("ff9f1c"), "SHARD": Color("2de2e6"), "L
 
 
 static func hp_bar(m: Dictionary, fixer: Dictionary, w := 90.0) -> MeterBar:
-	var s := UnitDB.merc_stats(m, fixer)
+	var s := DiceDB.merc_dice(m, fixer)
 	var pct := float(m.get("hp_pct", 1.0))
 	var col := UITheme.GREEN if pct > 0.5 else (UITheme.YELLOW if pct > 0.25 else UITheme.RED)
 	var b := MeterBar.new("", col, 10)
@@ -25,7 +25,36 @@ static func chrome_bar(m: Dictionary, w := 70.0) -> MeterBar:
 	return b
 
 
-## Compact merc summary: face, name, class, trait, HP, chrome, scars, perk.
+## Both dice of a merc as two rows of small faces (gear on top, chrome below).
+static func dice_strip(m: Dictionary, fixer: Dictionary, face_px := 22.0) -> Control:
+	var strip := DiceStrip.new()
+	strip.dice = DiceDB.merc_dice(m, fixer)
+	strip.face_px = face_px
+	strip.custom_minimum_size = Vector2(6 * (face_px + 2) + 14, 2 * (face_px + 2))
+	return strip
+
+
+class DiceStrip:
+	extends Control
+	var dice := {}
+	var face_px := 22.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var font := ThemeDB.fallback_font
+		var rows := ["gear", "chrome"]
+		for r in 2:
+			var y := r * (face_px + 2)
+			draw_rect(Rect2(0, y + 2, 10, face_px - 4), Color("8a8fa8") if r == 0 else Color("ff6ad5"))
+			draw_string(font, Vector2(0, y + face_px * 0.5 + 3), "G" if r == 0 else "C", HORIZONTAL_ALIGNMENT_CENTER, 10, 8, Color.BLACK)
+			var faces: Array = dice[rows[r]]
+			for k in faces.size():
+				DieView.draw_face(self, font, Rect2(14 + k * (face_px + 2), y, face_px, face_px), faces[k])
+
+
+## Compact merc summary: face, name, class, trait, HP, chrome, scars, perk, both dice.
 static func merc_row(m: Dictionary, fixer: Dictionary, extra: Control = null) -> PanelContainer:
 	var c: Dictionary = UnitDB.CLASSES[m.cls]
 	var p := HubW.panel(Color(c.color, 0.45), HubW.PANEL_BG, 1, 5)
@@ -59,6 +88,7 @@ static func merc_row(m: Dictionary, fixer: Dictionary, extra: Control = null) ->
 	bars.add_child(hp_bar(m, fixer, 92))
 	bars.add_child(chrome_bar(m, 66))
 	v.add_child(bars)
+	v.add_child(dice_strip(m, fixer, 20.0))
 	var gear := []
 	for ref in [m.get("weapon", ""), m.get("armor", "")] + Array(m.implants):
 		if ref != "":

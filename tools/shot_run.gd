@@ -47,8 +47,8 @@ func _run() -> void:
 			run.crew[0].scars = 1
 			run.crew[1].weapon = "smart_rifle"
 			run.crew[1].hp_pct = 0.55
-			run.spare.append_array(["on_dodge", "fork", "breach+", "patch"])
-			run.threads[0][3] = "amp"
+			run.spare.append_array(["dodge_relay", "spoof", "breach+", "ice_sentry"])
+			run.hacks[3] = "ping"
 		match s:
 			"map", "preview", "deck", "crew":
 				run.pos = run.reachable()[0]

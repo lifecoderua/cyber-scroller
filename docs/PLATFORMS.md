@@ -66,7 +66,7 @@ and mark it "played in browser".
   `DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)` from `_input`/`_unhandled_input` or a
   Button `pressed` handler, never from a timer or `_ready`.
 - **Touch browsers**: `emulate_mouse_from_touch` (default on) keeps mouse-based UI working.
-- **Keyboard focus**: `html/focus_canvas_on_start=true` so `1..9`, Space, Esc, A, F work immediately. In an iframe
+- **Keyboard focus**: `html/focus_canvas_on_start=true` so keyboard input works immediately. In an iframe
   (itch.io) the player must click once first.
 - **No threads**: `Thread`/`WorkerThreadPool` degrade to synchronous behavior in single-threaded builds.
 - **No OS-level features**: no `OS.execute`, limited file dialogs.
@@ -115,10 +115,9 @@ keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
   the window/stretch transform, and keep HUD margins at least the insets. Re-query on
   `NOTIFICATION_WM_SIZE_CHANGED`.
 - **Touch targets**: aim for 44-48 dp (about 7 mm). On a ~6" 1080p phone one virtual pixel is about 3 physical
-  pixels, so EXEC buttons, chip tiles and other buttons should be at least 24-28 virtual px high with 4+ px gaps.
-- **Pause on focus loss**: the fight scene enters the manual pause on `NOTIFICATION_APPLICATION_PAUSED` and
-  `APPLICATION_FOCUS_OUT`. Between fights the run is saved after every step, so closing the app is safe; a run
-  closed mid-fight resumes at the start of that fight.
+  pixels, so dice, hack buttons and other buttons should be at least 24-28 virtual px high with 4+ px gaps.
+- **Pause on focus loss**: fights are turn-based, so nothing runs while the app is in the background. The run is
+  saved after every step between fights; a run closed mid-fight resumes at the start of that fight.
 - **Back button**: handle `NOTIFICATION_WM_GO_BACK_REQUEST`.
 - Immersive mode is on (system bars hidden).
 - `user://` is app-private storage and is cleared on uninstall (`retain_data_on_uninstall=false`).

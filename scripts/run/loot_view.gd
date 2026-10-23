@@ -100,7 +100,7 @@ func _merc_button(item: String, i: int) -> Control:
 		col = UITheme.RED
 	var b := HubW.button("", func(): _give(item, i), 10, col)
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.custom_minimum_size.y = 44
+	b.custom_minimum_size.y = 54
 	var v := HubW.vbox(0)
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -113,6 +113,10 @@ func _merc_button(item: String, i: int) -> Control:
 	f.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	f.clip_text = true
 	v.add_child(f)
+	var ch := HubW.lbl(String(fit.get("change", "")), 8, UITheme.CYAN)
+	ch.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ch.clip_text = true
+	v.add_child(ch)
 	b.add_child(v)
 	return b
 

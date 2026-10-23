@@ -82,5 +82,14 @@ static func button(text: String, on_press: Callable, size := FONT_SIZE) -> Butto
 	return b
 
 
+## Trace colour ramp: purple, orange from 50%, red from 75%.
+static func trace_color(v: float) -> Color:
+	if v >= 75.0:
+		return RED
+	if v >= 50.0:
+		return Color("ff9f1c")
+	return PURPLE
+
+
 static func format_eddies(n: int) -> String:
 	return "%d €$" % n

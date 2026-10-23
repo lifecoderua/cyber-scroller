@@ -11,7 +11,6 @@ const DeckEditor := preload("res://scripts/run/deck_editor.gd")
 const CrewView := preload("res://scripts/run/crew_view.gd")
 const RunOver := preload("res://scripts/run/run_over_view.gd")
 const BG_SCRIPT := preload("res://scripts/hub/hub_bg.gd")
-const DeckMeters := preload("res://scripts/mission/deck_meters.gd")
 
 var run: RunState
 var fixer: Dictionary
@@ -104,7 +103,7 @@ func _update_header() -> void:
 		HubFx.flash(_eddies.get_parent(), UITheme.GREEN if d > 0 else UITheme.MAGENTA, 0.4)
 	_shown_eddies = run.eddies
 	_eddies.text = "%d €$" % run.eddies
-	_trace.color = DeckMeters.trace_color(run.trace)
+	_trace.color = UITheme.trace_color(run.trace)
 	_trace.set_value(run.trace, 100.0, "%d%%" % int(run.trace))
 	_trace.warn = run.trace >= 75.0
 	var row := run.current_row()
@@ -158,7 +157,7 @@ func changed() -> void:
 func _build_draft() -> Control:
 	var v := HubW.vbox(6)
 	v.add_child(HubW.lbl("JACK IN: PICK A CREW", 16, UITheme.CYAN))
-	v.add_child(HubW.wrap(HubW.lbl("You never touch the street. Pick the hired guns you'll run through your deck. Two-merc crews come with +%d €$." % RunState.DUO_BONUS, 9, UITheme.TEXT_DIM)))
+	v.add_child(HubW.wrap(HubW.lbl("You never touch the street. Each merc brings two dice: G (gear: weapon + armor) and C (chrome: signature + implants).", 9, UITheme.TEXT_DIM)))
 	var list := HubW.vbox(8)
 	for i in run.drafts.size():
 		list.add_child(_draft_card(i))
@@ -174,8 +173,6 @@ func _draft_card(i: int) -> Control:
 	var head := HubW.hbox(6)
 	var names := team.map(func(m): return String(UnitDB.CLASSES[m.cls].name))
 	head.add_child(HubW.clip(HubW.lbl("CREW %s:  %s" % ["ABC"[i] if i < 3 else str(i + 1), " / ".join(names)], 11, UITheme.TEXT)))
-	if team.size() <= 2:
-		head.add_child(HubW.lbl("+%d €$" % RunState.DUO_BONUS, 10, UITheme.YELLOW))
 	v.add_child(head)
 	for m in team:
 		v.add_child(RunW.merc_row(m, fixer))
@@ -358,7 +355,7 @@ func pick_merc(item: String, on_pick: Callable) -> void:
 	for i in run.crew.size():
 		var m: Dictionary = run.crew[i]
 		var fit := run.fit_preview(item, i)
-		opts.append(["%s  (%s)" % [UnitDB.short_name(m), UnitDB.CLASSES[m.cls].name], fit.text,
+		opts.append(["%s  (%s)" % [UnitDB.short_name(m), UnitDB.CLASSES[m.cls].name], "%s  ·  %s" % [fit.text, fit.get("change", "")],
 			UITheme.RED if fit.warn or not fit.ok else UnitDB.CLASSES[m.cls].color])
 	choose("WHO GETS %s?" % ItemDB.display_name(item).to_upper(), opts, func(i: int):
 		var fit := run.fit_preview(item, i)

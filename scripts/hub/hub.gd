@@ -254,9 +254,9 @@ func show_hint() -> void:
 	v.add_child(HubW.lbl("WELCOME, FIXER", 16, UITheme.CYAN))
 	var lines := [
 		["You never hit the street. Pick a job, then a crew of hired guns. They fight on their own.", UITheme.TEXT],
-		["Your weapon is the cyberdeck: threads of chips. Trigger (when) > selector (who) > modifier (how) > payload (what).", UITheme.YELLOW],
-		["Threads run automatically. MANUAL threads wait for your EXEC tap.", UITheme.CYAN],
-		["After each fight pick ONE piece of loot: gear for a merc or a chip for the deck.", UITheme.GREEN],
+		["Fights are turns of dice. Each merc rolls a gear die and a chrome die; lock, reroll, then use them.", UITheme.YELLOW],
+		["Enemies show their intents first. Kill, stun, shield or taunt before they act. Hacks spend RAM.", UITheme.CYAN],
+		["After each fight pick ONE piece of loot: gear changes a merc's dice, chips are hacks and daemons.", UITheme.GREEN],
 		["Trace is your HP. At 100% the run is burned. Subnets and stealth keep it low.", UITheme.MAGENTA],
 	]
 	for ln in lines:

@@ -262,7 +262,7 @@ func enter(id: int) -> String:
 			pending = {"fight": fight_spec(n)}
 			trace += FIGHT_TRACE.get(n.type, 2.0) * (1.0 - float(fixer.get("trace_pct", 0.0)))
 			phase = "fight"
-			if trace >= CombatSim.TRACE_LIMIT:
+			if trace >= DiceCombat.TRACE_LIMIT:
 				_end("traced")
 				return "over"
 			return "fight"
@@ -300,7 +300,7 @@ func alert() -> bool:
 	return trace >= ALERT_TRACE
 
 
-## Apply a finished fight (CombatSim.result()).
+## Apply a finished fight (DiceCombat.result()).
 func finish_fight(res: Dictionary) -> void:
 	var n := node(pos)
 	kills += int(res.get("kills", 0))
@@ -493,7 +493,7 @@ func dice_change(before: Dictionary, after: Dictionary) -> String:
 		parts.append("HP %+d" % (int(b.hp) - int(a.hp)))
 	if parts.is_empty():
 		return "no dice change"
-	return " ".join(parts.slice(0, 4)) + (" ..." if parts.size() > 4 else "")
+	return " ".join(parts.slice(0, 2)) + (" +%d more" % (parts.size() - 2) if parts.size() > 2 else "")
 
 
 ## Equip gear on a merc. replace_index: implant slot to replace (-1 = append).
@@ -732,7 +732,7 @@ func event_choose(index: int) -> Dictionary:
 		phase = "fight"
 		return {"text": "Ambush!", "fight": true}
 	complete_node()
-	if trace >= CombatSim.TRACE_LIMIT:
+	if trace >= DiceCombat.TRACE_LIMIT:
 		_end("traced")
 	return {"text": " ".join(lines) if not lines.is_empty() else "You move on.", "fight": false}
 

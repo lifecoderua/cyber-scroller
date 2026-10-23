@@ -1,7 +1,7 @@
 extends PanelContainer
-## Crew sheet (between fights): one merc per page. Stats, trait, signature, gear slots,
-## chrome load (psychosis risk above the cap) and PORTS: which deck threads hook this
-## merc's implants. Chrome is an interface, both ways.
+## Crew sheet (between fights): one merc per page. Both dice face by face, trait, perk, gear
+## slots, chrome load (glitch faces above the cap) and PORTS: which daemons hook this merc's
+## implants. Chrome is an interface, both ways.
 
 var screen
 var run: RunState
@@ -51,7 +51,7 @@ func refresh() -> void:
 	HubW.clear(_body)
 	var m: Dictionary = run.crew[_i]
 	var c: Dictionary = UnitDB.CLASSES[m.cls]
-	var s := UnitDB.merc_stats(m, run.fixer)
+	var dd := DiceDB.merc_dice(m, run.fixer)
 	_pager.text = "%s  %d/%d" % [String(c.name).to_upper(), _i + 1, run.crew.size()]
 	var top := HubW.hbox(8)
 	top.add_child(HubW.portrait(m.cls, int(m.seed), 4))
@@ -60,16 +60,23 @@ func refresh() -> void:
 	tv.add_child(HubW.wrap(HubW.lbl(String(m.name), 14, UITheme.TEXT)))
 	tv.add_child(HubW.lbl("%s  ·  %s row  ·  %s" % [c.name, ["front", "mid", "back"][int(c.row)], c.weapon], 9, c.color))
 	tv.add_child(RunW.hp_bar(m, run.fixer, 150))
-	tv.add_child(HubW.lbl("DMG %.0f  ·  every %.2fs  ·  armor %d  ·  %s" % [s.dmg, s.interval, int(s.armor), "melee" if s.melee else "range %d" % int(s.range)], 9, UITheme.TEXT_DIM))
 	if int(m.scars) > 0:
-		tv.add_child(HubW.lbl("SCARS x%d: -%d%% max HP" % [int(m.scars), int(int(m.scars) * UnitDB.SCAR_HP * 100)], 9, UITheme.RED))
+		tv.add_child(HubW.lbl("SCARS x%d: -%d max HP" % [int(m.scars), int(m.scars)], 9, UITheme.RED))
 	top.add_child(tv)
 	_body.add_child(top)
+	_body.add_child(RunW.dice_strip(m, run.fixer, 40.0))
+	var faces := []
+	for which in ["gear", "chrome"]:
+		for f in dd[which]:
+			var line := DiceDB.describe(f)
+			if f.k != "blank" and not line in faces:
+				faces.append(line)
+	_body.add_child(HubW.wrap(HubW.lbl("\n".join(faces), 8, UITheme.TEXT_DIM)))
 
 	var t := UnitDB.trait_def(m)
 	if not t.is_empty():
 		_body.add_child(_section("TRAIT: " + String(t.name).to_upper(), String(t.desc), UITheme.YELLOW))
-	_body.add_child(_section("SIGNATURE: " + String(c.skill_name).to_upper(), "%s  (every %.0fs)" % [c.skill_desc, s.skill_cd], c.color))
+	_body.add_child(_section("SIGNATURE: " + String(c.skill_name).to_upper(), String(c.skill_desc), c.color))
 	if String(m.get("perk", "")) != "":
 		for pk in UnitDB.perk_choices(m):
 			if pk.id == m.perk:
@@ -90,20 +97,19 @@ func refresh() -> void:
 	var cb := RunW.chrome_bar(m, 200)
 	_body.add_child(cb)
 	if UnitDB.chrome_load(m) > UnitDB.chrome_cap(m):
-		_body.add_child(HubW.wrap(HubW.lbl("OVER CAP: stress builds when hit; at max the merc goes cyberpsycho for 5s (double damage, hits anyone close, ignores your deck).", 9, UITheme.RED)))
+		_body.add_child(HubW.wrap(HubW.lbl("OVER CAP: signature faces turn into GLITCH (3 damage to a random unit, your crew included; fires by itself if unused).", 9, UITheme.RED)))
 
 	_body.add_child(HubW.line(Color(UITheme.MAGENTA, 0.3)))
 	_body.add_child(HubW.lbl("PORTS", 10, UITheme.TEXT_DIM))
 	var ports := UnitDB.ports(m)
 	if ports.is_empty():
-		_body.add_child(HubW.lbl("No port implants: port triggers can't hook this merc.", 9, UITheme.TEXT_DIM))
+		_body.add_child(HubW.lbl("No port implants: port daemons can't hook this merc.", 9, UITheme.TEXT_DIM))
 	for p in ports:
 		var hooked := []
-		for ti in run.threads.size():
-			var trig := ChipDB.get_def(run.threads[ti][0])
-			if trig.get("port", "") == p:
-				hooked.append("T%d" % (ti + 1))
-		var txt := "On %s  ->  %s" % [String(p).capitalize(), ", ".join(hooked) if not hooked.is_empty() else "(free: slot an On %s trigger)" % String(p).capitalize()]
+		for ref in run.daemons:
+			if ChipDB.get_def(ref).get("port", "") == p:
+				hooked.append(ChipDB.display_name(ref))
+		var txt := "On %s  ->  %s" % [String(p).capitalize(), ", ".join(hooked) if not hooked.is_empty() else "(free: a port daemon can hook it)"]
 		_body.add_child(HubW.lbl(txt, 10, UITheme.CYAN if not hooked.is_empty() else UITheme.TEXT_DIM))
 
 
