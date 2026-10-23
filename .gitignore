@@ -11,3 +11,6 @@ dist/
 
 # Node
 node_modules/
+
+# System
+.DS_Store
